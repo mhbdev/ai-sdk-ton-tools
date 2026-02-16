@@ -1,0 +1,17 @@
+services:
+  e2b-infra:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${E2B_INFRA_IMAGE:-e2b-infra-runner:local}
+    volumes:
+      - ${E2B_INFRA_REPO_DIR:-./infra}:/workspace/infra
+      - ${E2B_GCLOUD_CONFIG_DIR:?Set E2B_GCLOUD_CONFIG_DIR in e2b-infra/.env}:/root/.config/gcloud
+      - ${E2B_SSH_DIR:?Set E2B_SSH_DIR in e2b-infra/.env}:/root/.ssh:ro
+      - ${E2B_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+    working_dir: /workspace/infra
+    environment:
+      TF_IN_AUTOMATION: "true"
+      CLOUDSDK_CONFIG: /root/.config/gcloud
+    stdin_open: true
+    tty: true

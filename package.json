@@ -1,0 +1,53 @@
+{
+  "name": "@mhbdev/ai-sdk-ton-tools",
+  "version": "0.1.0",
+  "description": "TON blockchain tools for Vercel AI SDK.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm build",
+    "prepublishOnly": "pnpm check"
+  },
+  "keywords": [
+    "ton",
+    "blockchain",
+    "ai",
+    "ai-sdk",
+    "tools",
+    "tonapi"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@ton-api/client": "^0.4.0",
+    "@ton/core": "^0.62.0",
+    "@ton/crypto": "^3.3.0"
+  },
+  "peerDependencies": {
+    "ai": "^6.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.4",
+    "ai": "^6.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "zod": "^4.3.5"
+  }
+}
