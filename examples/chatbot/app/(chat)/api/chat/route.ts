@@ -1,3 +1,4 @@
+import { createTonTools } from "@mhbdev/ai-sdk-ton-tools";
 import { geolocation } from "@vercel/functions";
 import {
   convertToModelMessages,
@@ -7,7 +8,6 @@ import {
   stepCountIs,
   streamText,
 } from "ai";
-import { createTonTools } from "@mhbdev/ai-sdk-ton-tools";
 import { after } from "next/server";
 import {
   createResumableStreamContext,
@@ -36,8 +36,8 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { getE2BSandboxStatus, logE2BConfigWarningOnce } from "@/lib/e2b/config";
-import { extractSandboxIdsFromParts } from "@/lib/e2b/sandbox-events";
 import { killSandbox } from "@/lib/e2b/sandbox";
+import { extractSandboxIdsFromParts } from "@/lib/e2b/sandbox-events";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
@@ -51,9 +51,9 @@ const tonTools = createTonTools({
 });
 const tonToolNames = Object.keys(tonTools) as Array<keyof typeof tonTools>;
 const tonSandboxTools = createTonSandboxTools();
-const tonSandboxToolNames = Object.keys(
-  tonSandboxTools
-) as Array<keyof typeof tonSandboxTools>;
+const tonSandboxToolNames = Object.keys(tonSandboxTools) as Array<
+  keyof typeof tonSandboxTools
+>;
 const baseActiveTools = [
   "getWeather",
   "createDocument",
@@ -379,7 +379,9 @@ export async function DELETE(request: Request) {
       const messages = await getMessagesByChatId({ id });
       const sandboxIds = Array.from(
         new Set(
-          messages.flatMap((message) => extractSandboxIdsFromParts(message.parts))
+          messages.flatMap((message) =>
+            extractSandboxIdsFromParts(message.parts)
+          )
         )
       );
 

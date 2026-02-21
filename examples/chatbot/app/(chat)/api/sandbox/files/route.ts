@@ -2,8 +2,8 @@ import type { NextRequest } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { getChatById } from "@/lib/db/queries";
 import { toE2BErrorResponse } from "@/lib/e2b/errors";
-import { ChatSDKError } from "@/lib/errors";
 import { getSandbox } from "@/lib/e2b/sandbox";
+import { ChatSDKError } from "@/lib/errors";
 
 export const runtime = "nodejs";
 

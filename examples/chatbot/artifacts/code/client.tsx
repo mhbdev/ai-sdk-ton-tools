@@ -54,15 +54,17 @@ const OUTPUT_HANDLERS = {
 
 const DEFAULT_PYODIDE_BASE_URL =
   "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/";
+const CODE_FENCE_LANGUAGE_REGEX = /```([a-zA-Z0-9_-]+)?/;
 
 const resolvePyodideBaseUrl = () => {
   const fromEnv = process.env.NEXT_PUBLIC_PYODIDE_INDEX_URL?.trim();
-  const baseUrl = fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_PYODIDE_BASE_URL;
+  const baseUrl =
+    fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_PYODIDE_BASE_URL;
   return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
 };
 
 const getFenceLanguage = (content: string) => {
-  const match = content.match(/```([a-zA-Z0-9_-]+)?/);
+  const match = content.match(CODE_FENCE_LANGUAGE_REGEX);
   return match?.[1]?.toLowerCase() ?? null;
 };
 
@@ -163,9 +165,11 @@ export const codeArtifact = new Artifact<"code", Metadata>({
 
         try {
           const pyodideBaseUrl = resolvePyodideBaseUrl();
-          const loader = (globalThis as {
-            loadPyodide?: (options: { indexURL: string }) => Promise<any>;
-          }).loadPyodide;
+          const loader = (
+            globalThis as {
+              loadPyodide?: (options: { indexURL: string }) => Promise<any>;
+            }
+          ).loadPyodide;
           if (!loader) {
             throw new Error(
               "Python runtime is not available. Check pyodide script loading."

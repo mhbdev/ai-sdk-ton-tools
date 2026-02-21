@@ -7,8 +7,8 @@ import { useWindowSize } from "usehooks-ts";
 import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
 import { BoxIcon, PlusIcon } from "./icons";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useSidebar } from "./ui/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
 
 function PureChatHeader({

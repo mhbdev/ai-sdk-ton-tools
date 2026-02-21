@@ -1,5 +1,5 @@
-import type { InferUITool, UIMessage } from "ai";
 import type { createTonTools } from "@mhbdev/ai-sdk-ton-tools";
+import type { InferUITool, UIMessage } from "ai";
 import { z } from "zod";
 import type { ArtifactKind } from "@/components/artifact";
 import type { createDocument } from "./ai/tools/create-document";

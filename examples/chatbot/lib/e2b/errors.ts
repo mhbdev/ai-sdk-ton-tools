@@ -32,15 +32,24 @@ export const toE2BChatError = (
   }
 
   if (error instanceof NotFoundError) {
-    return new ChatSDKError("not_found:chat", `E2B resource not found: ${message}`);
+    return new ChatSDKError(
+      "not_found:chat",
+      `E2B resource not found: ${message}`
+    );
   }
 
   if (error instanceof RateLimitError) {
-    return new ChatSDKError("rate_limit:chat", `E2B rate limit hit: ${message}`);
+    return new ChatSDKError(
+      "rate_limit:chat",
+      `E2B rate limit hit: ${message}`
+    );
   }
 
   if (error instanceof TimeoutError) {
-    return new ChatSDKError("offline:chat", `E2B request timed out: ${message}`);
+    return new ChatSDKError(
+      "offline:chat",
+      `E2B request timed out: ${message}`
+    );
   }
 
   return new ChatSDKError(fallbackCode, `E2B request failed: ${message}`);
@@ -50,4 +59,3 @@ export const toE2BErrorResponse = (
   error: unknown,
   fallbackCode: ErrorCode = "offline:chat"
 ) => toE2BChatError(error, fallbackCode).toResponse();
-

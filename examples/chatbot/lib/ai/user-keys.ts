@@ -1,6 +1,6 @@
 import {
-  SUPPORTED_PROVIDERS,
   getProviderFromModelId,
+  SUPPORTED_PROVIDERS,
   type SupportedProvider,
 } from "./model-utils";
 
@@ -58,7 +58,7 @@ export function saveProviderKeys(keys: ProviderKeyMap): void {
 export function getProviderKeyForModel(modelId: string): string | undefined {
   const provider = getProviderFromModelId(modelId);
   if (provider === "unknown") {
-    return undefined;
+    return;
   }
 
   const keys = loadProviderKeys();

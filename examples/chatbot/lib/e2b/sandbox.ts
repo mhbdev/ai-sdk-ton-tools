@@ -107,7 +107,10 @@ export const killSandbox = async (sandboxId: string): Promise<boolean> => {
   }
 
   try {
-    const sandbox = await Sandbox.connect(trimmedSandboxId, buildConnectionOptions());
+    const sandbox = await Sandbox.connect(
+      trimmedSandboxId,
+      buildConnectionOptions()
+    );
     await sandbox.kill();
     return true;
   } catch (error: unknown) {

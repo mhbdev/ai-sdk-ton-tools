@@ -22,9 +22,11 @@ export type E2BSandboxConfig = E2BSandboxStatus & {
 
 const DEFAULT_SANDBOX_TIMEOUT_MS = 300_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
-const MIN_TIMEOUT_MS = 1_000;
+const MIN_TIMEOUT_MS = 1000;
 const MAX_SANDBOX_TIMEOUT_MS = 86_400_000;
 const MAX_REQUEST_TIMEOUT_MS = 600_000;
+const URL_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//;
+const WHITESPACE_REGEX = /\s/;
 
 let cachedConfig: E2BSandboxConfig | null = null;
 let hasLoggedInvalidConfig = false;
@@ -79,9 +81,9 @@ const looksLikeUrl = (value: string) => {
   }
 };
 
-const hasUrlScheme = (value: string) => /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value);
+const hasUrlScheme = (value: string) => URL_SCHEME_REGEX.test(value);
 const looksLikeDomain = (value: string) =>
-  !/\s/.test(value) && !value.includes("/") && !value.includes("@");
+  !WHITESPACE_REGEX.test(value) && !value.includes("/") && !value.includes("@");
 
 const resolveConfig = (): E2BSandboxConfig => {
   const apiKey = normalize(process.env.E2B_API_KEY);
@@ -91,7 +93,8 @@ const resolveConfig = (): E2BSandboxConfig => {
   const sandboxUrl = normalize(process.env.E2B_SANDBOX_URL);
   const template = normalize(process.env.E2B_TEMPLATE);
   const debug = parseBoolean(process.env.E2B_DEBUG);
-  const selfHosted = parseBoolean(process.env.E2B_SELF_HOSTED) || Boolean(domain);
+  const selfHosted =
+    parseBoolean(process.env.E2B_SELF_HOSTED) || Boolean(domain);
   const mode: E2BMode = selfHosted ? "self-hosted" : "cloud";
 
   const timeoutMs = parseTimeoutMs({
@@ -134,7 +137,8 @@ const resolveConfig = (): E2BSandboxConfig => {
     return {
       enabled: false,
       mode,
-      reason: "Set E2B_API_KEY or E2B_ACCESS_TOKEN to enable E2B sandbox tools.",
+      reason:
+        "Set E2B_API_KEY or E2B_ACCESS_TOKEN to enable E2B sandbox tools.",
       timeoutMs,
       requestTimeoutMs,
       debug,
@@ -156,7 +160,8 @@ const resolveConfig = (): E2BSandboxConfig => {
     return {
       enabled: false,
       mode,
-      reason: "E2B_DOMAIN must be a domain name without protocol (for example: e2b.example.com).",
+      reason:
+        "E2B_DOMAIN must be a domain name without protocol (for example: e2b.example.com).",
       timeoutMs,
       requestTimeoutMs,
       debug,
@@ -167,7 +172,8 @@ const resolveConfig = (): E2BSandboxConfig => {
     return {
       enabled: false,
       mode,
-      reason: "E2B_DOMAIN must be a plain host name (for example: e2b.example.com).",
+      reason:
+        "E2B_DOMAIN must be a plain host name (for example: e2b.example.com).",
       timeoutMs,
       requestTimeoutMs,
       debug,

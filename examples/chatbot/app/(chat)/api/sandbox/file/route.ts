@@ -2,8 +2,8 @@ import type { NextRequest } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { getChatById } from "@/lib/db/queries";
 import { toE2BErrorResponse } from "@/lib/e2b/errors";
-import { ChatSDKError } from "@/lib/errors";
 import { getSandbox } from "@/lib/e2b/sandbox";
+import { ChatSDKError } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -40,7 +40,11 @@ export async function GET(request: NextRequest) {
       ? 20_000
       : Number.parseInt(maxChars, 10);
 
-  if (!Number.isFinite(parsedLimit) || parsedLimit < 1 || parsedLimit > 200_000) {
+  if (
+    !Number.isFinite(parsedLimit) ||
+    parsedLimit < 1 ||
+    parsedLimit > 200_000
+  ) {
     return new ChatSDKError(
       "bad_request:api",
       "maxChars must be an integer between 1 and 200000."

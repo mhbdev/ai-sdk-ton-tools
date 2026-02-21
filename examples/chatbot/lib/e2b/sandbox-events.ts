@@ -50,7 +50,9 @@ const extractFromPart = (part: unknown): SandboxEvent | null => {
   return parseSandboxEvent(record.output);
 };
 
-export const extractSandboxEventsFromParts = (parts: unknown): SandboxEvent[] => {
+export const extractSandboxEventsFromParts = (
+  parts: unknown
+): SandboxEvent[] => {
   if (!Array.isArray(parts)) {
     return [];
   }
@@ -74,4 +76,3 @@ export const extractSandboxIdsFromParts = (parts: unknown): string[] =>
         .filter((id): id is string => typeof id === "string" && id.length > 0)
     )
   );
-
