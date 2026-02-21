@@ -14,7 +14,10 @@ export function TonConnectProvider({ children }: { children: ReactNode }) {
       return "";
     }
 
-    return new URL("/tonconnect-manifest.json", window.location.origin).toString();
+    return new URL(
+      "/tonconnect-manifest.json",
+      window.location.origin
+    ).toString();
   }, []);
 
   if (!manifestUrl) {

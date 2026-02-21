@@ -1,12 +1,12 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
+import { useTonWallet } from "@tonconnect/ui-react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
-import { useTonWallet } from "@tonconnect/ui-react";
 import { ChatHeader } from "@/components/chat-header";
 import {
   AlertDialog,
@@ -224,9 +224,9 @@ export function Chat({
   useEffect(() => {
     const sandboxEvents: Array<{ sandboxId?: string; status?: string }> = [];
 
-    messages.forEach((message) => {
+    for (const message of messages) {
       sandboxEvents.push(...extractSandboxEventsFromParts(message.parts));
-    });
+    }
 
     const latestEvent = sandboxEvents.at(-1);
     if (!latestEvent || typeof window === "undefined") {
@@ -264,8 +264,8 @@ export function Chat({
         <ChatHeader
           chatId={id}
           isReadonly={isReadonly}
-          selectedVisibilityType={initialVisibilityType}
           onOpenSandbox={() => setIsSandboxOpen(true)}
+          selectedVisibilityType={initialVisibilityType}
         />
 
         <Messages

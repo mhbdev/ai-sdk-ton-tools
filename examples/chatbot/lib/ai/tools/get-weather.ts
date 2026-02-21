@@ -40,8 +40,7 @@ async function geocodeCity(
       return null;
     }
 
-    const result = (data as { results: Array<Record<string, unknown>> })
-      .results[0];
+    const result = (data as { results: Record<string, unknown>[] }).results[0];
 
     if (
       typeof result.latitude !== "number" ||
@@ -98,9 +97,10 @@ export const getWeather = tool({
       `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m&hourly=temperature_2m&daily=sunrise,sunset&timezone=auto`
     );
 
-    const weatherData = (await safeParseJson(response)) as
-      | Record<string, unknown>
-      | null;
+    const weatherData = (await safeParseJson(response)) as Record<
+      string,
+      unknown
+    > | null;
 
     if (!weatherData || typeof weatherData !== "object") {
       return {

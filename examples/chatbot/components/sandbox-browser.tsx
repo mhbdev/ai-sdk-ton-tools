@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { BoxIcon, AttachmentIcon } from "@/components/icons";
+import { AttachmentIcon, BoxIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -39,11 +39,7 @@ type SandboxFileResponse = {
   truncated: boolean;
 };
 
-const buildFilesUrl = (
-  chatId: string,
-  sandboxId: string,
-  path: string
-) => {
+const buildFilesUrl = (chatId: string, sandboxId: string, path: string) => {
   const params = new URLSearchParams({
     chatId,
     sandboxId,
@@ -53,11 +49,7 @@ const buildFilesUrl = (
   return `/api/sandbox/files?${params.toString()}`;
 };
 
-const buildFileUrl = (
-  chatId: string,
-  sandboxId: string,
-  path: string
-) => {
+const buildFileUrl = (chatId: string, sandboxId: string, path: string) => {
   const params = new URLSearchParams({
     chatId,
     sandboxId,

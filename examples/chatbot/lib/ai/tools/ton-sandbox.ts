@@ -1,5 +1,5 @@
-import { CommandExitError } from "e2b";
 import { tool } from "ai";
+import { CommandExitError } from "e2b";
 import { z } from "zod";
 import { getE2BSandboxConfig } from "@/lib/e2b/config";
 import { getSandbox, killSandbox } from "@/lib/e2b/sandbox";
@@ -19,7 +19,7 @@ const workdirSchema = z
 const timeoutSchema = z
   .number()
   .int()
-  .min(1_000)
+  .min(1000)
   .max(900_000)
   .optional()
   .describe("Timeout for the command in milliseconds.");
@@ -58,12 +58,10 @@ const packageManagerSchema = z
   .default("npm")
   .describe("Package manager to use for Node.js projects.");
 
-const quoteShellArg = (value: string) =>
-  `'${value.replace(/'/g, "'\\''")}'`;
+const quoteShellArg = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
-const isCommandExitError = (
-  error: unknown
-): error is CommandExitError => error instanceof CommandExitError;
+const isCommandExitError = (error: unknown): error is CommandExitError =>
+  error instanceof CommandExitError;
 
 const runSandboxCommand = async ({
   command,
@@ -112,7 +110,7 @@ export const createTonSandboxTools = () => ({
     description:
       "Show E2B sandbox configuration status (enabled mode, domain, template, timeouts).",
     inputSchema: z.object({}),
-    execute: async () => {
+    execute: () => {
       const config = getE2BSandboxConfig();
       return {
         enabled: config.enabled,
@@ -226,7 +224,7 @@ export const createTonSandboxTools = () => ({
         .optional()
         .describe("Force reinstall even if Node.js is present."),
     }),
-    execute: async ({ sandboxId, force }) => {
+    execute: ({ sandboxId, force }) => {
       const installScript = [
         "apt-get update",
         "apt-get install -y ca-certificates curl gnupg",
@@ -259,7 +257,7 @@ export const createTonSandboxTools = () => ({
       packageManager: packageManagerSchema,
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ path, packageManager, sandboxId }) => {
+    execute: ({ path, packageManager, sandboxId }) => {
       const command =
         packageManager === "pnpm"
           ? "pnpm init"
@@ -281,13 +279,7 @@ export const createTonSandboxTools = () => ({
       packageManager: packageManagerSchema,
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({
-      projectPath,
-      packages,
-      dev,
-      packageManager,
-      sandboxId,
-    }) => {
+    execute: ({ projectPath, packages, dev, packageManager, sandboxId }) => {
       const packageArgs = packages.map((name) => quoteShellArg(name)).join(" ");
       const devFlag =
         dev === true
@@ -316,13 +308,7 @@ export const createTonSandboxTools = () => ({
         .describe("Extra arguments passed to the script."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({
-      projectPath,
-      script,
-      packageManager,
-      args,
-      sandboxId,
-    }) => {
+    execute: ({ projectPath, script, packageManager, args, sandboxId }) => {
       const extraArgs = args?.map((value) => quoteShellArg(value)) ?? [];
       const command =
         packageManager === "pnpm"
@@ -443,10 +429,7 @@ export const createTonSandboxTools = () => ({
     description:
       "Create a new Blueprint project (non-interactive) in the sandbox.",
     inputSchema: z.object({
-      projectName: z
-        .string()
-        .min(1)
-        .describe("Project directory name."),
+      projectName: z.string().min(1).describe("Project directory name."),
       template: contractTypeSchema.default("tolk-empty"),
       contractName: z
         .string()
@@ -463,7 +446,7 @@ export const createTonSandboxTools = () => ({
       sandboxId: sandboxIdSchema,
       workdir: workdirSchema,
     }),
-    execute: async ({
+    execute: ({
       projectName,
       template,
       contractName,
@@ -496,8 +479,7 @@ export const createTonSandboxTools = () => ({
     },
   }),
   tonBlueprintCreateContract: tool({
-    description:
-      "Create a new contract inside an existing Blueprint project.",
+    description: "Create a new contract inside an existing Blueprint project.",
     inputSchema: z.object({
       projectPath: projectPathSchema,
       contractName: z
@@ -507,7 +489,7 @@ export const createTonSandboxTools = () => ({
       template: contractTypeSchema,
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ projectPath, contractName, template, sandboxId }) => {
+    execute: ({ projectPath, contractName, template, sandboxId }) => {
       const command = [
         "npx --yes blueprint create",
         quoteShellArg(contractName),
@@ -518,21 +500,14 @@ export const createTonSandboxTools = () => ({
     },
   }),
   tonBlueprintRenameContract: tool({
-    description:
-      "Rename a contract inside a Blueprint project.",
+    description: "Rename a contract inside a Blueprint project.",
     inputSchema: z.object({
       projectPath: projectPathSchema,
-      fromName: z
-        .string()
-        .min(1)
-        .describe("Existing contract name."),
-      toName: z
-        .string()
-        .min(1)
-        .describe("New contract name."),
+      fromName: z.string().min(1).describe("Existing contract name."),
+      toName: z.string().min(1).describe("New contract name."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ projectPath, fromName, toName, sandboxId }) => {
+    execute: ({ projectPath, fromName, toName, sandboxId }) => {
       const command = [
         "npx --yes blueprint rename",
         quoteShellArg(fromName),
@@ -556,12 +531,7 @@ export const createTonSandboxTools = () => ({
         .describe("Build all contracts in the project."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({
-      projectPath,
-      contractName,
-      buildAll,
-      sandboxId,
-    }) => {
+    execute: ({ projectPath, contractName, buildAll, sandboxId }) => {
       const command = buildAll
         ? "npx --yes blueprint build --all"
         : contractName
@@ -581,7 +551,7 @@ export const createTonSandboxTools = () => ({
         .describe("Optional test file or contract name to run."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ projectPath, testTarget, sandboxId }) => {
+    execute: ({ projectPath, testTarget, sandboxId }) => {
       const command = testTarget
         ? `npx --yes blueprint test ${quoteShellArg(testTarget)}`
         : "npx --yes blueprint test";
@@ -601,12 +571,7 @@ export const createTonSandboxTools = () => ({
         .describe("Skip lifecycle scripts during install."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({
-      projectPath,
-      packageManager,
-      ignoreScripts,
-      sandboxId,
-    }) => {
+    execute: ({ projectPath, packageManager, ignoreScripts, sandboxId }) => {
       const ignoreFlag = ignoreScripts ? " --ignore-scripts" : "";
       const command =
         packageManager === "pnpm"
@@ -628,7 +593,7 @@ export const createTonSandboxTools = () => ({
         .describe("Additional arguments for the script."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ projectPath, scriptName, args, sandboxId }) => {
+    execute: ({ projectPath, scriptName, args, sandboxId }) => {
       const extraArgs = args?.map((value) => quoteShellArg(value)) ?? [];
       const command = [
         "npx --yes blueprint run",
@@ -647,7 +612,7 @@ export const createTonSandboxTools = () => ({
         .describe("Compiler to update."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ projectPath, compiler, sandboxId }) => {
+    execute: ({ projectPath, compiler, sandboxId }) => {
       const command = `npx --yes blueprint set ${quoteShellArg(compiler)}`;
       return runSandboxCommand({ command, sandboxId, workdir: projectPath });
     },
@@ -664,8 +629,7 @@ export const createTonSandboxTools = () => ({
       }),
   }),
   tonBlueprintCommand: tool({
-    description:
-      "Run an arbitrary Blueprint CLI command inside a project.",
+    description: "Run an arbitrary Blueprint CLI command inside a project.",
     inputSchema: z.object({
       projectPath: projectPathSchema,
       subcommand: z.string().min(1).describe("Blueprint subcommand to run."),
@@ -675,7 +639,7 @@ export const createTonSandboxTools = () => ({
         .describe("Additional arguments for the subcommand."),
       sandboxId: sandboxIdSchema,
     }),
-    execute: async ({ projectPath, subcommand, args, sandboxId }) => {
+    execute: ({ projectPath, subcommand, args, sandboxId }) => {
       const extraArgs = args?.map((value) => quoteShellArg(value)) ?? [];
       const command = [
         "npx --yes blueprint",

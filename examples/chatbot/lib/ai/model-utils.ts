@@ -7,14 +7,11 @@ export const SUPPORTED_PROVIDERS = [
 
 export type SupportedProvider = (typeof SUPPORTED_PROVIDERS)[number];
 
-export function getProviderFromModelId(modelId: string):
-  | SupportedProvider
-  | "unknown" {
+export function getProviderFromModelId(
+  modelId: string
+): SupportedProvider | "unknown" {
   const provider = modelId.split("/")[0]?.toLowerCase();
-  if (
-    provider &&
-    SUPPORTED_PROVIDERS.includes(provider as SupportedProvider)
-  ) {
+  if (provider && SUPPORTED_PROVIDERS.includes(provider as SupportedProvider)) {
     return provider as SupportedProvider;
   }
   return "unknown";

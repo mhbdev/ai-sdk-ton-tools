@@ -27,22 +27,8 @@ import {
   ModelSelectorName,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
-import {
-  chatModels,
-  DEFAULT_CHAT_MODEL,
-  modelsByProvider,
-} from "@/lib/ai/models";
-import {
-  SUPPORTED_PROVIDERS,
-  type SupportedProvider,
-} from "@/lib/ai/model-utils";
-import {
-  PROVIDER_KEYS_STORAGE_KEY,
-  normalizeProviderKeyMap,
-  type ProviderKeyMap,
-} from "@/lib/ai/user-keys";
-import type { Attachment, ChatMessage } from "@/lib/types";
-import { cn, safeParseResponseJson } from "@/lib/utils";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -51,14 +37,24 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import {
+  SUPPORTED_PROVIDERS,
+  type SupportedProvider,
+} from "@/lib/ai/model-utils";
+import {
+  chatModels,
+  DEFAULT_CHAT_MODEL,
+  modelsByProvider,
+} from "@/lib/ai/models";
+import {
+  normalizeProviderKeyMap,
+  PROVIDER_KEYS_STORAGE_KEY,
+  type ProviderKeyMap,
+} from "@/lib/ai/user-keys";
+import type { Attachment, ChatMessage } from "@/lib/types";
+import { cn, safeParseResponseJson } from "@/lib/utils";
 import {
   PromptInput,
   PromptInputSubmit,
@@ -659,7 +655,7 @@ function ProviderKeysDialog() {
                   key={provider}
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm font-medium">
+                    <div className="flex items-center gap-2 font-medium text-sm">
                       <ModelSelectorLogo
                         className="size-4"
                         provider={provider}
@@ -675,7 +671,10 @@ function ProviderKeysDialog() {
                   </div>
                   <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto] sm:items-center sm:gap-3">
                     <div className="relative">
-                      <Label className="sr-only" htmlFor={`provider-key-${provider}`}>
+                      <Label
+                        className="sr-only"
+                        htmlFor={`provider-key-${provider}`}
+                      >
                         {label} API key
                       </Label>
                       <Input
@@ -715,7 +714,7 @@ function ProviderKeysDialog() {
                       )}
                     </div>
                   </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
+                  <p className="mt-2 text-muted-foreground text-xs">
                     Used only for {label} models on this device.
                   </p>
                 </div>

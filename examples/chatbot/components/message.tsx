@@ -343,7 +343,14 @@ const PurePreviewMessage = ({
               const toolType = type as `tool-${string}`;
               const { toolCallId, state, input } = part as {
                 toolCallId: string;
-                state: "input-streaming" | "input-available" | "approval-requested" | "approval-responded" | "output-available" | "output-error" | "output-denied";
+                state:
+                  | "input-streaming"
+                  | "input-available"
+                  | "approval-requested"
+                  | "approval-responded"
+                  | "output-available"
+                  | "output-error"
+                  | "output-denied";
                 input?: unknown;
                 output?: unknown;
                 errorText?: string;
@@ -357,7 +364,10 @@ const PurePreviewMessage = ({
                     : JSON.stringify(output, null, 2);
 
               return (
-                <Tool defaultOpen={state !== "output-available"} key={toolCallId}>
+                <Tool
+                  defaultOpen={state !== "output-available"}
+                  key={toolCallId}
+                >
                   <ToolHeader state={state} type={toolType} />
                   <ToolContent>
                     {(state === "input-available" ||
