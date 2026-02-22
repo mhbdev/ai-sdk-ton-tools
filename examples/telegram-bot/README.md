@@ -112,10 +112,10 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 
 ## Docker Compose (Production Baseline)
 
-1. Copy Docker env template and set all required values.
+1. Copy the unified env template and set all required values.
 
 ```bash
-cp .env.docker.example .env
+cp .env.example .env
 ```
 
 2. Start core production stack (bot + migration + Postgres + Redis):
@@ -123,6 +123,8 @@ cp .env.docker.example .env
 ```bash
 docker compose up -d --build
 ```
+
+This compose file does not publish host ports by default. In Dokploy, map your domain to the service container port (bot: `8787`, optional grafana: `3000`, prometheus: `9090`) via Traefik/domain routing.
 
 3. Optional profiles:
 
@@ -140,8 +142,12 @@ docker compose --profile polling-fallback up -d telegram-bot-polling
 4. Verify service readiness:
 
 ```bash
-curl http://localhost:8787/healthz
-curl http://localhost:8787/readyz
+# Through your mapped domain (recommended in Dokploy)
+curl https://bot.example.com/healthz
+curl https://bot.example.com/readyz
+
+# Or from inside the container network
+docker compose exec telegram-bot node -e "fetch('http://127.0.0.1:8787/healthz').then(r=>r.text()).then(t=>console.log(t))"
 ```
 
 ## Health Endpoints

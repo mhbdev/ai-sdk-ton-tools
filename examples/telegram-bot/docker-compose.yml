@@ -71,8 +71,8 @@ services:
         condition: service_healthy
       telegram-bot-migrate:
         condition: service_completed_successfully
-    ports:
-      - "${BOT_PORT:-8787}:8787"
+    expose:
+      - "8787"
     healthcheck:
       test:
         [
@@ -237,8 +237,8 @@ services:
     networks:
       - edge
       - internal
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+    expose:
+      - "9090"
     restart: unless-stopped
 
   grafana:
@@ -257,8 +257,8 @@ services:
     networks:
       - edge
       - internal
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+    expose:
+      - "3000"
     restart: unless-stopped
 
   postgres-backup:

@@ -3,6 +3,5 @@ node_modules
 .env.*
 .DS_Store
 !examples/telegram-bot/.env.example
-!examples/telegram-bot/.env.docker.example
 !examples/telegram-bot/.env.local.example
 !examples/telegram-bot/.env.local.infra.example
