@@ -81,6 +81,9 @@ const throwTelegramAuthHint = (error: unknown): never => {
 
 export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const env = getEnv();
+  const normalizedAppBaseUrl = env.APP_BASE_URL.endsWith("/")
+    ? env.APP_BASE_URL
+    : `${env.APP_BASE_URL}/`;
   const app = Fastify({
     logger: false,
   });
@@ -165,7 +168,10 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const startTelegramRuntime = async () => {
     const bot = getBot();
     if (env.BOT_RUN_MODE === "webhook") {
-      const webhookUrl = `${env.APP_BASE_URL}/telegram/webhook/${env.TELEGRAM_WEBHOOK_SECRET}`;
+      const webhookUrl = new URL(
+        `telegram/webhook/${env.TELEGRAM_WEBHOOK_SECRET}`,
+        normalizedAppBaseUrl,
+      ).toString();
       try {
         await retryTelegramBootstrap({
           label: "setWebhook",
