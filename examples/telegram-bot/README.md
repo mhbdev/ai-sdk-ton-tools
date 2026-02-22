@@ -31,6 +31,55 @@ pnpm db:migrate
 pnpm dev
 ```
 
+## Local Dev (Host Bot + Docker Infra)
+
+This mode keeps the bot process on your host machine (`pnpm dev`) for fast reloads and realtime update handling.
+
+One-line bootstrap (recommended):
+
+```bash
+pnpm dev:local:bootstrap
+```
+
+This command runs pre-checks, prepares local env files if missing, starts local infra, waits for health, runs migrations, and starts the bot in watch mode.
+
+1. Prepare local env files:
+
+```bash
+cp .env.local.example .env.local
+cp .env.local.infra.example .env.local.infra
+```
+
+2. Start local infra only (Postgres + Redis + OTEL Collector; no bot container):
+
+```bash
+pnpm infra:local:up
+```
+
+3. Run migrations against local infra:
+
+```bash
+pnpm db:migrate:local
+```
+
+4. Start the bot on host with local env:
+
+```bash
+pnpm dev:local
+```
+
+5. Optional local DB UI:
+
+```bash
+pnpm infra:local:tools
+```
+
+6. OTEL endpoint for local host-run bot:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
 ## Runtime Modes
 
 - `BOT_RUN_MODE=webhook`: enable `POST /telegram/webhook/:secret`.
@@ -39,9 +88,15 @@ pnpm dev
 ## Model Provider Routing
 
 - Primary provider: OpenRouter (`OPENROUTER_API_KEY`)
-- Fallback provider: AI Gateway (`AI_GATEWAY_API_KEY`)
+- Optional fallback provider: AI Gateway (`AI_GATEWAY_API_KEY`)
 - Default model selector: `AI_MODEL`
-- Optional dedicated fallback model: `AI_GATEWAY_FALLBACK_MODEL`
+- Optional dedicated fallback model (used only when AI Gateway key is set): `AI_GATEWAY_FALLBACK_MODEL`
+
+## OpenTelemetry Endpoint
+
+- Self-hosted local infra (host-run bot): `http://localhost:4318`
+- Docker production stack (container-run bot): `http://otel-collector:4318`
+- Managed vendor OTLP endpoints are provided in the telemetry vendor dashboard (OTLP/HTTP endpoint).
 
 ## Docker Compose (Production Baseline)
 
@@ -60,7 +115,7 @@ docker compose up -d --build
 3. Optional profiles:
 
 ```bash
-# Observability stack (OTEL Collector + Prometheus + Grafana + exporters)
+# Observability stack (Prometheus + Grafana + exporters)
 docker compose --profile observability up -d
 
 # Postgres local backup service

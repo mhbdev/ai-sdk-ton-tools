@@ -1,6 +1,17 @@
 import { z } from "zod";
 import type { BotRunMode } from "@/types/contracts";
 
+const optionalNonEmptyString = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  },
+  z.string().min(1).optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -11,9 +22,9 @@ const envSchema = z.object({
   BOT_ADMIN_TOKEN: z.string().min(1),
   TONAPI_API_KEY: z.string().min(1),
   OPENROUTER_API_KEY: z.string().min(1),
-  AI_GATEWAY_API_KEY: z.string().min(1),
+  AI_GATEWAY_API_KEY: optionalNonEmptyString,
   AI_MODEL: z.string().min(1).default("openai/gpt-5.2"),
-  AI_GATEWAY_FALLBACK_MODEL: z.string().optional(),
+  AI_GATEWAY_FALLBACK_MODEL: optionalNonEmptyString,
   POSTGRES_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   KMS_KEY_ID: z.string().min(1),

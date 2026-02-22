@@ -113,6 +113,7 @@ const executeWithProviderFallback = async (input: {
   env: ReturnType<typeof getEnv>;
 }): Promise<AgentProviderExecutionResult> => {
   const attempts = buildAgentModelAttempts(input.request.modelId);
+  const hasFallbackAttempt = attempts.length > 1;
   let primaryError: unknown;
 
   for (let index = 0; index < attempts.length; index += 1) {
@@ -167,13 +168,23 @@ const executeWithProviderFallback = async (input: {
     } catch (error) {
       if (index === 0) {
         primaryError = error;
-        logger.warn("Primary model provider failed; switching to fallback provider.", {
+        if (hasFallbackAttempt) {
+          logger.warn("Primary model provider failed; switching to fallback provider.", {
+            correlationId: input.request.correlationId,
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+
+        logger.error("Primary model provider failed and fallback is not configured.", {
           correlationId: input.request.correlationId,
           provider: attempt.provider,
           modelId: attempt.modelId,
           error: error instanceof Error ? error.message : String(error),
         });
-        continue;
+        throw error;
       }
       logger.error("Fallback model provider failed after primary failure.", {
         correlationId: input.request.correlationId,

@@ -8,16 +8,24 @@
   },
   "scripts": {
     "dev": "tsx watch src/main.ts",
+    "dev:local": "node --env-file=.env.local --import tsx --watch src/main.ts",
+    "dev:local:bootstrap": "node ./scripts/dev-local-bootstrap.mjs",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate:local": "node --env-file=.env.local --import tsx src/db/migrate.ts",
+    "infra:local:up": "docker compose -f docker-compose.local.yml --env-file .env.local.infra up -d",
+    "infra:local:tools": "docker compose -f docker-compose.local.yml --env-file .env.local.infra --profile tools up -d",
+    "infra:local:down": "docker compose -f docker-compose.local.yml --env-file .env.local.infra down",
+    "infra:local:reset": "docker compose -f docker-compose.local.yml --env-file .env.local.infra down -v --remove-orphans",
+    "infra:local:logs": "docker compose -f docker-compose.local.yml --env-file .env.local.infra logs -f --tail=200"
   },
   "dependencies": {
     "@ai-sdk/gateway": "2.0.0-beta.85",
-    "@mhbdev/ai-sdk-ton-tools": "^0.1.0",
+    "@mhbdev/ai-sdk-ton-tools": "^0.2.0",
     "@openrouter/ai-sdk-provider": "^2.0.0",
     "ai": "6.0.0-beta.159",
     "bullmq": "^5.61.0",

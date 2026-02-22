@@ -1,0 +1,88 @@
+name: telegram-ton-agent-bot-local
+
+services:
+  postgres:
+    image: postgres:16.8-bookworm
+    init: true
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-telegram_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-telegram_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-telegram-bot-local-postgres}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: UTC
+    command:
+      [
+        "postgres",
+        "-c",
+        "max_connections=150",
+        "-c",
+        "shared_buffers=256MB",
+        "-c",
+        "log_min_duration_statement=250ms",
+      ]
+    ports:
+      - "${LOCAL_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - local-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-bookworm
+    init: true
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-telegram-bot-local-redis}
+    command:
+      [
+        "sh",
+        "-ec",
+        "exec redis-server --appendonly yes --appendfsync everysec --save 900 1 --save 300 10 --save 60 10000 --maxmemory-policy noeviction --requirepass \"$${REDIS_PASSWORD}\"",
+      ]
+    ports:
+      - "${LOCAL_REDIS_PORT:-6379}:6379"
+    volumes:
+      - local-redis-data:/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.107.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${LOCAL_OTEL_OTLP_GRPC_PORT:-4317}:4317"
+      - "${LOCAL_OTEL_OTLP_HTTP_PORT:-4318}:4318"
+      - "${LOCAL_OTEL_HEALTH_PORT:-13133}:13133"
+      - "${LOCAL_OTEL_METRICS_PORT:-8889}:8889"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:4.8.1
+    profiles: ["tools"]
+    ports:
+      - "${LOCAL_ADMINER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  local-postgres-data:
+  local-redis-data:

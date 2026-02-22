@@ -43,16 +43,21 @@ export const buildAgentModelAttempts = (requestedModelId: string): AgentModelAtt
     env.AI_GATEWAY_FALLBACK_MODEL,
   );
 
-  return [
+  const attempts: AgentModelAttempt[] = [
     {
       provider: "openrouter",
       modelId: openRouterModel,
       model: getOpenRouterProvider()(openRouterModel),
     },
-    {
+  ];
+
+  if (env.AI_GATEWAY_API_KEY) {
+    attempts.push({
       provider: "ai-gateway",
       modelId: gatewayModelId,
       model: gateway.languageModel(gatewayModelId),
-    },
-  ];
+    });
+  }
+
+  return attempts;
 };
