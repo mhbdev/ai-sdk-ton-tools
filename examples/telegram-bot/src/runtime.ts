@@ -168,10 +168,7 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const startTelegramRuntime = async () => {
     const bot = getBot();
     if (env.BOT_RUN_MODE === "webhook") {
-      const webhookUrl = new URL(
-        `telegram/webhook/${env.TELEGRAM_WEBHOOK_SECRET}`,
-        normalizedAppBaseUrl,
-      ).toString();
+      const webhookUrl = new URL("telegram/webhook", normalizedAppBaseUrl).toString();
       try {
         await retryTelegramBootstrap({
           label: "setWebhook",
