@@ -27,10 +27,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 COPY docker/runtime/entrypoint.sh /usr/local/bin/entrypoint
 
-RUN chmod 0755 /usr/local/bin/entrypoint \
-    && chown -R node:node /app
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/app --shell /usr/sbin/nologin app \
+    && chmod 0755 /usr/local/bin/entrypoint \
+    && chown -R 10001:10001 /app /home/app
 
-USER node
+USER 10001:10001
 
 EXPOSE 8787
 
