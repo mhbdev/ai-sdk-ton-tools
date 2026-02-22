@@ -32,10 +32,15 @@ type TurnExecutionResult = {
   }>;
 };
 
+type TurnExecutionCallbacks = {
+  onTextDelta?: (delta: string) => void | Promise<void>;
+};
+
 type AgentProviderExecutionResult = {
   provider: AgentModelProvider;
   modelId: string;
-  result: Awaited<ReturnType<ToolLoopAgent["generate"]>>;
+  responseText: string;
+  responseMessages: ModelMessage[];
   usedFallback: boolean;
   primaryErrorMessage?: string;
 };
@@ -112,11 +117,36 @@ const collectToolApprovalParts = (messages: ModelMessage[]) => {
     );
 };
 
+const emitTextDelta = (
+  callback: TurnExecutionCallbacks["onTextDelta"],
+  delta: string,
+  correlationId: string,
+) => {
+  if (!callback || delta.length === 0) {
+    return;
+  }
+
+  try {
+    void Promise.resolve(callback(delta)).catch((error) => {
+      logger.debug("onTextDelta callback failed; continuing stream.", {
+        correlationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  } catch (error) {
+    logger.debug("onTextDelta callback threw synchronously; continuing stream.", {
+      correlationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 const executeWithProviderFallback = async (input: {
   request: TurnExecutionRequest;
   modelMessages: ModelMessage[];
   tools: ToolSet;
   env: ReturnType<typeof getEnv>;
+  callbacks?: TurnExecutionCallbacks;
 }): Promise<AgentProviderExecutionResult> => {
   const attempts = buildAgentModelAttempts(input.request.modelId);
   const hasFallbackAttempt = attempts.length > 1;
@@ -127,6 +157,7 @@ const executeWithProviderFallback = async (input: {
     if (!attempt) {
       continue;
     }
+    let emittedAnyDelta = false;
 
     const agent = new ToolLoopAgent({
       id: "telegram-ton-agent",
@@ -153,14 +184,39 @@ const executeWithProviderFallback = async (input: {
     });
 
     try {
-      const result = await agent.generate({
+      const streamResult = await agent.stream({
         messages: input.modelMessages,
       });
+      let streamedText = "";
+
+      for await (const chunk of streamResult.fullStream) {
+        if (chunk.type !== "text-delta" || chunk.text.length === 0) {
+          continue;
+        }
+        emittedAnyDelta = true;
+        streamedText += chunk.text;
+        emitTextDelta(
+          input.callbacks?.onTextDelta,
+          chunk.text,
+          input.request.correlationId,
+        );
+      }
+
+      const [streamText, streamResponse] = await Promise.all([
+        streamResult.text,
+        streamResult.response,
+      ]);
+      const normalizedText =
+        streamText.trim().length > 0 ? streamText : streamedText;
+      const responseMessages = Array.isArray(streamResponse.messages)
+        ? (streamResponse.messages as ModelMessage[])
+        : [];
 
       return {
         provider: attempt.provider,
         modelId: attempt.modelId,
-        result,
+        responseText: normalizedText,
+        responseMessages,
         usedFallback: index > 0,
         ...(primaryError
           ? {
@@ -175,7 +231,16 @@ const executeWithProviderFallback = async (input: {
       if (index === 0) {
         primaryError = error;
         if (hasFallbackAttempt) {
-          logger.warn("Primary model provider failed; switching to fallback provider.", {
+          if (emittedAnyDelta) {
+            logger.error("Primary stream failed after partial tokens; fallback suppressed.", {
+              correlationId: input.request.correlationId,
+              provider: attempt.provider,
+              modelId: attempt.modelId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
+          logger.warn("Primary model provider stream failed; switching to fallback provider.", {
             correlationId: input.request.correlationId,
             provider: attempt.provider,
             modelId: attempt.modelId,
@@ -184,7 +249,7 @@ const executeWithProviderFallback = async (input: {
           continue;
         }
 
-        logger.error("Primary model provider failed and fallback is not configured.", {
+        logger.error("Primary model provider stream failed and fallback is not configured.", {
           correlationId: input.request.correlationId,
           provider: attempt.provider,
           modelId: attempt.modelId,
@@ -192,7 +257,7 @@ const executeWithProviderFallback = async (input: {
         });
         throw error;
       }
-      logger.error("Fallback model provider failed after primary failure.", {
+      logger.error("Fallback model provider stream failed after primary failure.", {
         correlationId: input.request.correlationId,
         provider: attempt.provider,
         modelId: attempt.modelId,
@@ -215,6 +280,7 @@ const executeWithProviderFallback = async (input: {
 
 export const executeAgentTurn = async (
   request: TurnExecutionRequest,
+  callbacks?: TurnExecutionCallbacks,
 ): Promise<TurnExecutionResult> => {
   const env = getEnv();
   const tools = buildPolicyWrappedTonTools({
@@ -247,12 +313,9 @@ export const executeAgentTurn = async (
     modelMessages,
     tools,
     env,
+    ...(callbacks ? { callbacks } : {}),
   });
-  const result = providerExecution.result;
-
-  const responseMessages = Array.isArray(result.response?.messages)
-    ? (result.response.messages as ModelMessage[])
-    : [];
+  const responseMessages = providerExecution.responseMessages;
 
   if (responseMessages.length > 0) {
     await persistModelMessages({
@@ -301,7 +364,7 @@ export const executeAgentTurn = async (
     metadata: {
       sessionId: request.sessionId,
       hasApprovals: approvals.length > 0,
-      textLength: result.text?.length ?? 0,
+      textLength: providerExecution.responseText.length,
       provider: providerExecution.provider,
       modelId: providerExecution.modelId,
       usedFallback: providerExecution.usedFallback,
@@ -318,7 +381,7 @@ export const executeAgentTurn = async (
 
   const toolResults = collectToolResultParts(responseMessages);
   const resolvedResponse = resolveTurnResponseText({
-    rawText: result.text,
+    rawText: providerExecution.responseText,
     approvalsCount: approvals.length,
     approvalWasGranted: request.approvalResponse?.approved === true,
     toolResults,

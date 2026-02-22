@@ -1,5 +1,4 @@
 import { Bot } from "grammy";
-import { setTimeout as sleep } from "node:timers/promises";
 import { getEnv } from "@/config/env";
 import { logger } from "@/observability/logger";
 import type { ChatType } from "@/types/contracts";
@@ -7,8 +6,7 @@ import { chunkTelegramMessage } from "@/utils/chunk";
 
 let botInstance: Bot | null = null;
 const TELEGRAM_MAX_TEXT_LENGTH = 4096;
-const DEFAULT_DRAFT_STEPS = 7;
-const DRAFT_STEP_DELAY_MS = 120;
+const DRAFT_STREAM_UPDATE_INTERVAL_MS = 180;
 const BOT_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 let cachedBotTopicsMode:
   | {
@@ -88,73 +86,122 @@ const hashToDraftId = (value: string) => {
   return normalized === 0 ? 1 : normalized;
 };
 
-const buildDraftFrames = (text: string, stepCount: number) => {
-  const frames: string[] = [];
-  for (let step = 1; step <= stepCount; step += 1) {
-    const end = Math.floor((text.length * step) / stepCount);
-    const frame = text.slice(0, end).trim();
-    if (frame.length > 0 && frames[frames.length - 1] !== frame) {
-      frames.push(frame);
-    }
-  }
-  return frames;
+type TelegramDraftStreamSession = {
+  pushDelta: (delta: string) => void;
+  finish: (finalText?: string) => Promise<boolean>;
 };
 
-export const streamTelegramDraftText = async (
+const createNoopDraftSession = (): TelegramDraftStreamSession => ({
+  pushDelta: () => undefined,
+  finish: async () => false,
+});
+
+export const createTelegramTokenDraftStream = async (
   chatId: string,
-  text: string,
   options?: {
     messageThreadId?: number;
     draftSeed?: string;
     chatType?: ChatType;
   },
-) => {
+): Promise<TelegramDraftStreamSession> => {
   const env = getEnv();
   if (!env.TELEGRAM_ENABLE_STREAM_DRAFTS) {
-    return false;
+    return createNoopDraftSession();
   }
 
   // Telegram draft streaming is supported in private chats when bot topics mode is enabled.
   if (options?.chatType !== "private") {
-    return false;
+    return createNoopDraftSession();
   }
 
   if (!(await getBotTopicsModeEnabled())) {
-    return false;
+    return createNoopDraftSession();
   }
 
-  const normalizedText = text.trim();
-  if (normalizedText.length === 0 || normalizedText.length > TELEGRAM_MAX_TEXT_LENGTH) {
-    return false;
-  }
-
+  const bot = getBot();
   const numericChatId = Number(chatId);
   const draftId = hashToDraftId(options?.draftSeed ?? `${Date.now()}-${chatId}`);
-  const stepCount = Math.min(
-    DEFAULT_DRAFT_STEPS,
-    Math.max(2, Math.ceil(normalizedText.length / 280)),
-  );
-  const frames = buildDraftFrames(normalizedText, stepCount);
-  if (frames.length < 2) {
-    return false;
-  }
+  let bufferedText = "";
+  let lastSentText = "";
+  let lastSentAt = 0;
+  let failed = false;
+  let flushTimer: NodeJS.Timeout | null = null;
+  let sendChain: Promise<void> = Promise.resolve();
 
-  try {
-    const bot = getBot();
-    for (const frame of frames) {
-      await bot.api.sendMessageDraft(numericChatId, draftId, frame, {
-        ...(typeof options?.messageThreadId === "number"
-          ? { message_thread_id: options.messageThreadId }
-          : {}),
-      });
-      await sleep(DRAFT_STEP_DELAY_MS);
+  const queueSend = () => {
+    if (failed) {
+      return;
     }
-    return true;
-  } catch (error) {
-    logger.warn("Failed to stream Telegram draft updates; falling back to normal send.", {
-      error: error instanceof Error ? error.message : String(error),
-      chatId,
-    });
-    return false;
-  }
+
+    const snapshot = bufferedText.trimEnd();
+    if (snapshot.length === 0 || snapshot.length > TELEGRAM_MAX_TEXT_LENGTH) {
+      return;
+    }
+    if (snapshot === lastSentText) {
+      return;
+    }
+
+    sendChain = sendChain
+      .then(async () => {
+        await bot.api.sendMessageDraft(numericChatId, draftId, snapshot, {
+          ...(typeof options?.messageThreadId === "number"
+            ? { message_thread_id: options.messageThreadId }
+            : {}),
+        });
+        lastSentText = snapshot;
+        lastSentAt = Date.now();
+      })
+      .catch((error) => {
+        failed = true;
+        logger.warn("Failed to stream Telegram token draft; continuing without live draft.", {
+          error: error instanceof Error ? error.message : String(error),
+          chatId,
+        });
+      });
+  };
+
+  const clearFlushTimer = () => {
+    if (!flushTimer) {
+      return;
+    }
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  };
+
+  const scheduleFlush = () => {
+    if (failed || flushTimer) {
+      return;
+    }
+
+    const elapsed = Date.now() - lastSentAt;
+    const delay = Math.max(0, DRAFT_STREAM_UPDATE_INTERVAL_MS - elapsed);
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      queueSend();
+    }, delay);
+  };
+
+  return {
+    pushDelta: (delta: string) => {
+      if (failed || typeof delta !== "string" || delta.length === 0) {
+        return;
+      }
+
+      bufferedText += delta;
+      if (Date.now() - lastSentAt >= DRAFT_STREAM_UPDATE_INTERVAL_MS) {
+        queueSend();
+        return;
+      }
+      scheduleFlush();
+    },
+    finish: async (finalText?: string) => {
+      if (typeof finalText === "string" && finalText.trim().length > 0) {
+        bufferedText = finalText;
+      }
+      clearFlushTimer();
+      queueSend();
+      await sendChain;
+      return !failed && lastSentText.length > 0;
+    },
+  };
 };

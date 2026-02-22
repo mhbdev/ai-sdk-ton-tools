@@ -4,7 +4,7 @@ Production-grade Telegram bot service for TON tools with:
 - `grammY` transport (webhook and polling modes)
 - AI SDK `ToolLoopAgent`
 - OpenRouter as primary model provider with AI Gateway fallback
-- Telegram native draft-style streaming responses (`sendMessageDraft`)
+- Telegram native token-level streaming responses (`ToolLoopAgent.stream` + `sendMessageDraft`)
 - thread/topic auto-creation with LLM-generated title + emoji for new prompts
 - strict approval workflow for critical actions
 - queue-based processing with idempotency

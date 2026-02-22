@@ -7,7 +7,11 @@ import { withChatLock } from "@/locks/chat-lock";
 import { logger } from "@/observability/logger";
 import { bullConnection } from "@/queue/connection";
 import { deadLetterQueue } from "@/queue/queues";
-import { getBot, sendTelegramText, streamTelegramDraftText } from "@/telegram/bot";
+import {
+  createTelegramTokenDraftStream,
+  getBot,
+  sendTelegramText,
+} from "@/telegram/bot";
 
 const sendApprovalCards = async (input: {
   chatId: string;
@@ -70,15 +74,23 @@ export const createAgentTurnWorker = () =>
           }, 4_000);
 
           try {
-            const result = await executeAgentTurn(job.data);
+            const draftStream = await createTelegramTokenDraftStream(
+              String(job.data.telegramChatId),
+              {
+                ...(typeof job.data.messageThreadId === "number"
+                  ? { messageThreadId: job.data.messageThreadId }
+                  : {}),
+                draftSeed: job.data.correlationId,
+                chatType: job.data.chatType,
+              },
+            );
 
-            await streamTelegramDraftText(String(job.data.telegramChatId), result.responseText, {
-              ...(typeof job.data.messageThreadId === "number"
-                ? { messageThreadId: job.data.messageThreadId }
-                : {}),
-              draftSeed: job.data.correlationId,
-              chatType: job.data.chatType,
+            const result = await executeAgentTurn(job.data, {
+              onTextDelta: (delta) => {
+                draftStream.pushDelta(delta);
+              },
             });
+            await draftStream.finish(result.responseText);
             await sendTelegramText(String(job.data.telegramChatId), result.responseText, {
               ...(typeof job.data.messageThreadId === "number"
                 ? { messageThreadId: job.data.messageThreadId }
