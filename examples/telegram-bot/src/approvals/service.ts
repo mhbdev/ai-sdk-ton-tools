@@ -1,15 +1,19 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { renderApprovalCardText } from "@/approvals/presenter";
 import {
   createToolApproval,
+  getToolApprovalByCallbackToken,
   expirePendingApproval,
   getToolApproval,
   updateToolApprovalDecision,
 } from "@/db/queries";
 import { appendAuditEvent } from "@/db/queries/audit";
 import { logger } from "@/observability/logger";
-import { enqueueApprovalTimeout } from "@/queue/queues";
+import { enqueueApprovalCountdown, enqueueApprovalTimeout } from "@/queue/queues";
+import type { RiskProfile } from "@/types/contracts";
 
 const APPROVAL_TTL_MS = 5 * 60 * 1000;
+const APPROVAL_COUNTDOWN_INTERVAL_MS = 30_000;
 
 type ToolApprovalRequestPart = {
   type: "tool-approval-request";
@@ -39,10 +43,16 @@ const parseApprovalParts = (content: unknown): ToolApprovalRequestPart[] => {
 export const hashProofPayload = (payload: string) =>
   createHash("sha256").update(payload).digest("hex");
 
+const createApprovalCallbackToken = () =>
+  randomBytes(7).toString("base64url").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 14);
+
 export const registerApprovalRequests = async (input: {
   sessionId: string;
   content: unknown;
   correlationId: string;
+  telegramChatId: string;
+  messageThreadId?: number;
+  riskProfile: RiskProfile;
 }) => {
   const parts = parseApprovalParts(input.content);
   if (parts.length === 0) {
@@ -58,6 +68,13 @@ export const registerApprovalRequests = async (input: {
       toolCallId: part.toolCall.toolCallId,
       inputJson: part.toolCall.input,
       status: "requested",
+      callbackToken: createApprovalCallbackToken(),
+      telegramChatId: input.telegramChatId,
+      ...(typeof input.messageThreadId === "number"
+        ? { messageThreadId: input.messageThreadId }
+        : { messageThreadId: null }),
+      promptMessageId: null,
+      riskProfile: input.riskProfile,
       expiresAt: new Date(Date.now() + APPROVAL_TTL_MS),
     });
 
@@ -65,6 +82,11 @@ export const registerApprovalRequests = async (input: {
       approvalId: part.approvalId,
       correlationId: input.correlationId,
       delayMs: APPROVAL_TTL_MS,
+    });
+    await enqueueApprovalCountdown({
+      approvalId: part.approvalId,
+      correlationId: input.correlationId,
+      delayMs: APPROVAL_COUNTDOWN_INTERVAL_MS,
     });
 
     await appendAuditEvent({
@@ -76,6 +98,7 @@ export const registerApprovalRequests = async (input: {
         approvalId: part.approvalId,
         toolName: part.toolCall.toolName,
         toolCallId: part.toolCall.toolCallId,
+        callbackToken: record.callbackToken,
       },
     });
     created.push(record);
@@ -115,7 +138,7 @@ export const decideApproval = async (input: {
   }
 
   const status = input.approved ? "approved" : "denied";
-  await updateToolApprovalDecision({
+  const updated = await updateToolApprovalDecision({
     approvalId: input.approvalId,
     status,
     decidedBy: input.decidedBy,
@@ -139,21 +162,25 @@ export const decideApproval = async (input: {
     approved: input.approved,
   });
 
-  return { ok: true, approval: current };
+  return { ok: true, approval: updated ?? current };
 };
+
+export const getApprovalFromCallbackToken = async (callbackToken: string) =>
+  getToolApprovalByCallbackToken(callbackToken);
 
 export const buildApprovalPromptText = (input: {
   approvalId: string;
   toolName: string;
   toolInput: unknown;
   expiresAt: Date;
+  riskProfile?: RiskProfile;
+  status?: "requested" | "approved" | "denied" | "expired" | "failed";
 }) =>
-  [
-    "Approval required for critical TON action.",
-    `Approval ID: ${input.approvalId}`,
-    `Tool: ${input.toolName}`,
-    `Input: ${JSON.stringify(input.toolInput)}`,
-    `Expires: ${input.expiresAt.toISOString()}`,
-    "",
-    "Use the provided buttons to approve or deny.",
-  ].join("\n");
+  renderApprovalCardText({
+    approvalId: input.approvalId,
+    toolName: input.toolName,
+    inputJson: input.toolInput,
+    expiresAt: input.expiresAt,
+    riskProfile: input.riskProfile ?? "balanced",
+    status: input.status ?? "requested",
+  }).text;

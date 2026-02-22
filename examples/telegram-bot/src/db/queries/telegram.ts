@@ -5,19 +5,38 @@ import {
   telegramChats,
   telegramUsers,
 } from "@/db/schema";
-import type { ChatType, TonNetwork } from "@/types/contracts";
+import type {
+  ChatType,
+  ResponseStyle,
+  RiskProfile,
+  TonNetwork,
+} from "@/types/contracts";
 
 export const upsertTelegramUser = async (input: {
   telegramUserId: string;
   username?: string;
   firstName?: string;
   locale?: string;
+  defaultResponseStyle?: ResponseStyle;
+  defaultRiskProfile?: RiskProfile;
+  defaultNetwork?: TonNetwork;
+  defaultWalletLinkId?: string | null;
 }) => {
   const now = new Date();
   const valuePatch = {
     ...(input.username ? { username: input.username } : {}),
     ...(input.firstName ? { firstName: input.firstName } : {}),
     ...(input.locale ? { locale: input.locale } : {}),
+    ...(input.defaultResponseStyle
+      ? { defaultResponseStyle: input.defaultResponseStyle }
+      : {}),
+    ...(input.defaultRiskProfile
+      ? { defaultRiskProfile: input.defaultRiskProfile }
+      : {}),
+    ...(input.defaultNetwork ? { defaultNetwork: input.defaultNetwork } : {}),
+    ...("defaultWalletLinkId" in input
+      ? { defaultWalletLinkId: input.defaultWalletLinkId ?? null }
+      : {}),
   };
   const [updated] = await db
     .update(telegramUsers)
@@ -52,6 +71,15 @@ export const upsertTelegramUser = async (input: {
   return row ?? null;
 };
 
+export const getTelegramUser = async (telegramUserId: string) => {
+  const [row] = await db
+    .select()
+    .from(telegramUsers)
+    .where(eq(telegramUsers.telegramUserId, telegramUserId))
+    .limit(1);
+  return row ?? null;
+};
+
 export const upsertTelegramChat = async (input: {
   telegramChatId: string;
   chatType: ChatType;
@@ -62,7 +90,6 @@ export const upsertTelegramChat = async (input: {
     .update(telegramChats)
     .set({
       chatType: input.chatType,
-      activeModel: input.modelId,
       updatedAt: now,
     })
     .where(eq(telegramChats.telegramChatId, input.telegramChatId))
@@ -113,6 +140,56 @@ export const setChatNetwork = async (
       updatedAt: new Date(),
     })
     .where(eq(telegramChats.telegramChatId, telegramChatId));
+};
+
+export const setTelegramUserPreferences = async (input: {
+  telegramUserId: string;
+  responseStyle?: ResponseStyle;
+  riskProfile?: RiskProfile;
+  network?: TonNetwork;
+  defaultWalletLinkId?: string | null;
+}) => {
+  const patch = {
+    ...(input.responseStyle ? { defaultResponseStyle: input.responseStyle } : {}),
+    ...(input.riskProfile ? { defaultRiskProfile: input.riskProfile } : {}),
+    ...(input.network ? { defaultNetwork: input.network } : {}),
+    ...("defaultWalletLinkId" in input
+      ? { defaultWalletLinkId: input.defaultWalletLinkId ?? null }
+      : {}),
+    updatedAt: new Date(),
+  };
+
+  const [row] = await db
+    .update(telegramUsers)
+    .set(patch)
+    .where(eq(telegramUsers.telegramUserId, input.telegramUserId))
+    .returning();
+  return row ?? null;
+};
+
+export const setTelegramChatPreferences = async (input: {
+  telegramChatId: string;
+  responseStyleOverride?: ResponseStyle | null;
+  riskProfileOverride?: RiskProfile | null;
+  network?: TonNetwork;
+}) => {
+  const patch = {
+    ...("responseStyleOverride" in input
+      ? { responseStyleOverride: input.responseStyleOverride ?? null }
+      : {}),
+    ...("riskProfileOverride" in input
+      ? { riskProfileOverride: input.riskProfileOverride ?? null }
+      : {}),
+    ...(input.network ? { network: input.network } : {}),
+    updatedAt: new Date(),
+  };
+
+  const [row] = await db
+    .update(telegramChats)
+    .set(patch)
+    .where(eq(telegramChats.telegramChatId, input.telegramChatId))
+    .returning();
+  return row ?? null;
 };
 
 const buildSessionScopeFilter = (input: {

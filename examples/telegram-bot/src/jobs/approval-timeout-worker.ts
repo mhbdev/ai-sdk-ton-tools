@@ -1,9 +1,10 @@
 import { Worker } from "bullmq";
+import { renderApprovalCardText } from "@/approvals/presenter";
 import { appendAuditEvent } from "@/db/queries";
 import { expirePendingApproval, getSessionById, getToolApproval } from "@/db/queries";
 import { logger } from "@/observability/logger";
 import { bullConnection } from "@/queue/connection";
-import { sendTelegramText } from "@/telegram/bot";
+import { editTelegramText, sendTelegramText } from "@/telegram/bot";
 
 export const createApprovalTimeoutWorker = () =>
   new Worker(
@@ -18,7 +19,7 @@ export const createApprovalTimeoutWorker = () =>
         return;
       }
 
-      await expirePendingApproval(approval.approvalId);
+      const expired = await expirePendingApproval(approval.approvalId);
       await appendAuditEvent({
         actorType: "system",
         actorId: "approval-timeout-worker",
@@ -30,11 +31,34 @@ export const createApprovalTimeoutWorker = () =>
         },
       });
 
+      if (
+        expired &&
+        typeof expired.promptMessageId === "number" &&
+        expired.promptMessageId > 0
+      ) {
+        const expiredCard = renderApprovalCardText({
+          approvalId: expired.approvalId,
+          toolName: expired.toolName,
+          inputJson: expired.inputJson,
+          expiresAt: expired.expiresAt,
+          riskProfile: expired.riskProfile,
+          status: "expired",
+          decidedAt: expired.decidedAt,
+          decidedBy: expired.decidedBy,
+        });
+
+        await editTelegramText({
+          chatId: expired.telegramChatId,
+          messageId: expired.promptMessageId,
+          text: expiredCard.text,
+        });
+      }
+
       const session = await getSessionById(approval.sessionId);
       if (session) {
         await sendTelegramText(
           session.telegramChatId,
-          `Approval ${approval.approvalId} expired and was cancelled.`,
+          "Approval expired and was cancelled. You can request a new action if needed.",
           {
             ...(typeof session.messageThreadId === "number"
               ? { messageThreadId: session.messageThreadId }

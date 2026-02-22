@@ -14,6 +14,15 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const tonNetworkEnum = pgEnum("ton_network", ["mainnet", "testnet"]);
+export const responseStyleEnum = pgEnum("response_style", [
+  "concise",
+  "detailed",
+]);
+export const riskProfileEnum = pgEnum("risk_profile", [
+  "cautious",
+  "balanced",
+  "advanced",
+]);
 export const chatTypeEnum = pgEnum("chat_type", [
   "private",
   "group",
@@ -42,6 +51,14 @@ export const telegramUsers = pgTable(
     username: varchar("username", { length: 64 }),
     firstName: varchar("first_name", { length: 255 }),
     locale: varchar("locale", { length: 16 }),
+    defaultResponseStyle: responseStyleEnum("default_response_style")
+      .notNull()
+      .default("concise"),
+    defaultRiskProfile: riskProfileEnum("default_risk_profile")
+      .notNull()
+      .default("balanced"),
+    defaultNetwork: tonNetworkEnum("default_network").notNull().default("mainnet"),
+    defaultWalletLinkId: uuid("default_wallet_link_id"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -62,6 +79,8 @@ export const telegramChats = pgTable(
     chatType: chatTypeEnum("chat_type").notNull(),
     network: tonNetworkEnum("network").notNull().default("mainnet"),
     activeModel: varchar("active_model", { length: 128 }).notNull(),
+    responseStyleOverride: responseStyleEnum("response_style_override"),
+    riskProfileOverride: riskProfileEnum("risk_profile_override"),
     status: varchar("status", { length: 32 }).notNull().default("active"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -126,10 +145,15 @@ export const toolApprovals = pgTable(
   "tool_approvals",
   {
     approvalId: varchar("approval_id", { length: 80 }).primaryKey(),
+    callbackToken: varchar("callback_token", { length: 32 }).notNull(),
     sessionId: uuid("session_id").notNull(),
     toolName: varchar("tool_name", { length: 120 }).notNull(),
     toolCallId: varchar("tool_call_id", { length: 120 }).notNull(),
     inputJson: jsonb("input_json").notNull(),
+    telegramChatId: varchar("telegram_chat_id", { length: 32 }).notNull(),
+    messageThreadId: integer("message_thread_id"),
+    promptMessageId: integer("prompt_message_id"),
+    riskProfile: riskProfileEnum("risk_profile").notNull().default("balanced"),
     status: toolApprovalStatusEnum("status").notNull().default("requested"),
     reason: text("reason"),
     expiresAt: timestamp("expires_at").notNull(),
@@ -139,6 +163,9 @@ export const toolApprovals = pgTable(
   },
   (table) => ({
     approvalSessionIdx: index("tool_approvals_session_idx").on(table.sessionId),
+    approvalCallbackTokenIdx: index("tool_approvals_callback_token_idx").on(
+      table.callbackToken,
+    ),
     approvalExpiryIdx: index("tool_approvals_expiry_idx").on(table.expiresAt),
   }),
 );
@@ -153,6 +180,8 @@ export const walletLinks = pgTable(
     address: varchar("address", { length: 128 }).notNull(),
     publicKey: varchar("public_key", { length: 256 }),
     walletApp: varchar("wallet_app", { length: 128 }),
+    label: varchar("label", { length: 64 }),
+    isDefault: boolean("is_default").notNull().default(false),
     proofHash: varchar("proof_hash", { length: 128 }).notNull(),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -161,6 +190,10 @@ export const walletLinks = pgTable(
   (table) => ({
     walletUserIdx: index("wallet_links_telegram_user_idx").on(table.telegramUserId),
     walletAddressIdx: index("wallet_links_address_idx").on(table.address),
+    walletDefaultIdx: index("wallet_links_default_idx").on(
+      table.telegramUserId,
+      table.isDefault,
+    ),
   }),
 );
 

@@ -1,6 +1,9 @@
 export type BotRunMode = "webhook" | "polling";
 export type TonNetwork = "mainnet" | "testnet";
 export type ChatType = "private" | "group" | "supergroup" | "channel";
+export type ResponseStyle = "concise" | "detailed";
+export type RiskProfile = "cautious" | "balanced" | "advanced";
+export type ApprovalRiskLevel = "low" | "medium" | "high" | "critical";
 
 export type ApprovalStatus =
   | "requested"
@@ -19,6 +22,7 @@ export type QueueName =
   | "updates"
   | "agent-turns"
   | "approval-timeouts"
+  | "approval-countdowns"
   | "retry-deadletter";
 
 export type BotUpdateJob = {
@@ -38,6 +42,8 @@ export type TurnExecutionRequest = {
   network: TonNetwork;
   walletAddress?: string;
   modelId: string;
+  responseStyle: ResponseStyle;
+  riskProfile: RiskProfile;
   approvalResponse?: {
     approvalId: string;
     approved: boolean;
@@ -53,9 +59,20 @@ export type ToolApprovalRecord = {
   inputJson: unknown;
   status: ApprovalStatus;
   reason?: string;
+  callbackToken: string;
+  telegramChatId: string;
+  messageThreadId?: number | null;
+  promptMessageId?: number | null;
+  riskProfile: RiskProfile;
   expiresAt: Date;
   decidedAt?: Date;
   decidedBy?: string;
+};
+
+export type ResolvedPreferences = {
+  responseStyle: ResponseStyle;
+  riskProfile: RiskProfile;
+  network: TonNetwork;
 };
 
 export type NetworkContext = {

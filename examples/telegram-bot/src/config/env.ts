@@ -95,6 +95,9 @@ const envSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalNonEmptyString,
   TELEGRAM_ENABLE_STREAM_DRAFTS: booleanFromEnv.default(true),
   TOPIC_AUTOCREATE_ENABLED: booleanFromEnv.default(true),
+  APPROVAL_UX_V2_ENABLED: booleanFromEnv.default(true),
+  PERSONALIZATION_UX_ENABLED: booleanFromEnv.default(true),
+  MULTI_WALLET_ENABLED: booleanFromEnv.default(true),
   APP_BASE_URL: z.string().url(),
   TONCONNECT_MANIFEST_URL: z.string().url(),
 });

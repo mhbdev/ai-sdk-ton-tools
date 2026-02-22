@@ -165,6 +165,49 @@ export const sendTelegramText = async (
   }
 };
 
+export const editTelegramText = async (input: {
+  chatId: string;
+  messageId: number;
+  text: string;
+  replyMarkup?: unknown | null;
+}) => {
+  try {
+    const bot = getBot();
+    if ("replyMarkup" in input) {
+      const editOptions = {
+        reply_markup:
+          input.replyMarkup === null
+            ? { inline_keyboard: [] }
+            : input.replyMarkup,
+      };
+      await bot.api.editMessageText(
+        Number(input.chatId),
+        input.messageId,
+        input.text,
+        editOptions as never,
+      );
+    } else {
+      await bot.api.editMessageText(
+        Number(input.chatId),
+        input.messageId,
+        input.text,
+      );
+    }
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/message is not modified/i.test(message)) {
+      return false;
+    }
+    logger.warn("Failed to edit Telegram message.", {
+      chatId: input.chatId,
+      messageId: input.messageId,
+      error: message,
+    });
+    return false;
+  }
+};
+
 const hashToDraftId = (value: string) => {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {

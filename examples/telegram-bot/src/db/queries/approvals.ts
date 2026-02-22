@@ -20,13 +20,22 @@ export const getToolApproval = async (approvalId: string) => {
   return row ?? null;
 };
 
+export const getToolApprovalByCallbackToken = async (callbackToken: string) => {
+  const [row] = await db
+    .select()
+    .from(toolApprovals)
+    .where(eq(toolApprovals.callbackToken, callbackToken))
+    .limit(1);
+  return row ?? null;
+};
+
 export const updateToolApprovalDecision = async (input: {
   approvalId: string;
   status: ApprovalStatus;
   decidedBy: string;
   reason?: string;
 }) => {
-  await db
+  const [row] = await db
     .update(toolApprovals)
     .set({
       status: input.status,
@@ -34,11 +43,13 @@ export const updateToolApprovalDecision = async (input: {
       decidedAt: new Date(),
       ...(input.reason ? { reason: input.reason } : {}),
     })
-    .where(eq(toolApprovals.approvalId, input.approvalId));
+    .where(eq(toolApprovals.approvalId, input.approvalId))
+    .returning();
+  return row ?? null;
 };
 
 export const expirePendingApproval = async (approvalId: string) => {
-  await db
+  const [row] = await db
     .update(toolApprovals)
     .set({
       status: "expired",
@@ -51,7 +62,9 @@ export const expirePendingApproval = async (approvalId: string) => {
         eq(toolApprovals.approvalId, approvalId),
         eq(toolApprovals.status, "requested"),
       ),
-    );
+    )
+    .returning();
+  return row ?? null;
 };
 
 export const listExpiredApprovals = async (now: Date) => {
@@ -61,4 +74,24 @@ export const listExpiredApprovals = async (now: Date) => {
     .where(
       and(eq(toolApprovals.status, "requested"), lt(toolApprovals.expiresAt, now)),
     );
+};
+
+export const updateToolApprovalPromptMessage = async (input: {
+  approvalId: string;
+  telegramChatId: string;
+  messageThreadId?: number;
+  promptMessageId: number;
+}) => {
+  const [row] = await db
+    .update(toolApprovals)
+    .set({
+      telegramChatId: input.telegramChatId,
+      ...(typeof input.messageThreadId === "number"
+        ? { messageThreadId: input.messageThreadId }
+        : { messageThreadId: null }),
+      promptMessageId: input.promptMessageId,
+    })
+    .where(eq(toolApprovals.approvalId, input.approvalId))
+    .returning();
+  return row ?? null;
 };

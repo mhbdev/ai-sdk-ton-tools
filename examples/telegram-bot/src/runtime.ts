@@ -12,6 +12,7 @@ import { redis } from "@/queue/connection";
 import { enqueueUpdate } from "@/queue/queues";
 import {
   createAgentTurnWorker,
+  createApprovalCountdownWorker,
   createApprovalTimeoutWorker,
   createDeadLetterWorker,
   createUpdateWorker,
@@ -149,11 +150,18 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
 
   const updateWorker = createUpdateWorker();
   const agentTurnWorker = createAgentTurnWorker();
+  const approvalCountdownWorker = createApprovalCountdownWorker();
   const approvalTimeoutWorker = createApprovalTimeoutWorker();
   const deadLetterWorker = createDeadLetterWorker();
 
   const registerWorkerLogging = () => {
-    const workers = [updateWorker, agentTurnWorker, approvalTimeoutWorker, deadLetterWorker];
+    const workers = [
+      updateWorker,
+      agentTurnWorker,
+      approvalCountdownWorker,
+      approvalTimeoutWorker,
+      deadLetterWorker,
+    ];
     for (const worker of workers) {
       worker.on("failed", (job, error) => {
         logger.error("Worker job failed.", {
@@ -256,6 +264,7 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
           app.close(),
           updateWorker.close(),
           agentTurnWorker.close(),
+          approvalCountdownWorker.close(),
           approvalTimeoutWorker.close(),
           deadLetterWorker.close(),
           redis.quit(),

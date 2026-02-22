@@ -33,6 +33,17 @@ export const approvalTimeoutQueue = new Queue<{
   },
 });
 
+export const approvalCountdownQueue = new Queue<{
+  approvalId: string;
+  correlationId: string;
+}, void, string>("approval-countdowns", {
+  connection: bullConnection,
+  defaultJobOptions: {
+    ...defaultJobOptions,
+    attempts: 1,
+  },
+});
+
 export const deadLetterQueue = new Queue<{
   queue: QueueName;
   payload: unknown;
@@ -71,6 +82,24 @@ export const enqueueApprovalTimeout = async (input: {
     {
       delay: input.delayMs,
       jobId: `approval-expire-${input.approvalId}`,
+      attempts: 1,
+    },
+  );
+
+export const enqueueApprovalCountdown = async (input: {
+  approvalId: string;
+  correlationId: string;
+  delayMs: number;
+}) =>
+  approvalCountdownQueue.add(
+    "refresh-approval-card" as const,
+    {
+      approvalId: input.approvalId,
+      correlationId: input.correlationId,
+    },
+    {
+      delay: input.delayMs,
+      jobId: `approval-refresh-${input.approvalId}-${Date.now()}`,
       attempts: 1,
     },
   );

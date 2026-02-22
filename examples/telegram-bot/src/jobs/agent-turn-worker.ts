@@ -1,8 +1,9 @@
-import { InlineKeyboard } from "grammy";
 import { Worker } from "bullmq";
 import { executeAgentTurn } from "@/agent/ton-agent";
-import { buildApprovalPromptText } from "@/approvals/service";
-import { touchSession } from "@/db/queries";
+import { renderApprovalCardText } from "@/approvals/presenter";
+import { createApprovalPendingKeyboard } from "@/approvals/ui";
+import { getEnv } from "@/config/env";
+import { touchSession, updateToolApprovalPromptMessage } from "@/db/queries";
 import { withChatLock } from "@/locks/chat-lock";
 import { logger } from "@/observability/logger";
 import { bullConnection } from "@/queue/connection";
@@ -20,8 +21,10 @@ const sendApprovalCards = async (input: {
   replyToMessageId?: number;
   approvals: Array<{
     approvalId: string;
+    callbackToken: string;
     toolName: string;
     toolCallId: string;
+    riskProfile: "cautious" | "balanced" | "advanced";
     expiresAt: Date;
     inputJson: unknown;
   }>;
@@ -32,16 +35,15 @@ const sendApprovalCards = async (input: {
 
   const bot = getBot();
   for (const approval of input.approvals) {
-    const keyboard = new InlineKeyboard()
-      .text("Approve", `approval:${approval.approvalId}:approve`)
-      .text("Deny", `approval:${approval.approvalId}:deny`);
-
-    const approvalText = buildApprovalPromptText({
+    const keyboard = createApprovalPendingKeyboard(approval.callbackToken);
+    const approvalText = renderApprovalCardText({
       approvalId: approval.approvalId,
       toolName: approval.toolName,
-      toolInput: approval.inputJson,
+      inputJson: approval.inputJson,
       expiresAt: approval.expiresAt,
-    });
+      riskProfile: approval.riskProfile,
+      status: "requested",
+    }).text;
 
     const options = {
       ...(typeof input.messageThreadId === "number"
@@ -59,7 +61,19 @@ const sendApprovalCards = async (input: {
     };
 
     try {
-      await bot.api.sendMessage(Number(input.chatId), approvalText, options);
+      const response = await bot.api.sendMessage(
+        Number(input.chatId),
+        approvalText,
+        options,
+      );
+      await updateToolApprovalPromptMessage({
+        approvalId: approval.approvalId,
+        telegramChatId: input.chatId,
+        ...(typeof input.messageThreadId === "number"
+          ? { messageThreadId: input.messageThreadId }
+          : {}),
+        promptMessageId: response.message_id,
+      });
     } catch (error) {
       if (
         !isTelegramMessageThreadNotFoundError(error) ||
@@ -74,8 +88,13 @@ const sendApprovalCards = async (input: {
         error: error instanceof Error ? error.message : String(error),
       });
 
-      await bot.api.sendMessage(Number(input.chatId), approvalText, {
+      const response = await bot.api.sendMessage(Number(input.chatId), approvalText, {
         reply_markup: keyboard,
+      });
+      await updateToolApprovalPromptMessage({
+        approvalId: approval.approvalId,
+        telegramChatId: input.chatId,
+        promptMessageId: response.message_id,
       });
     }
   }
@@ -85,6 +104,7 @@ export const createAgentTurnWorker = () =>
   new Worker(
     "agent-turns",
     async (job) => {
+      const env = getEnv();
       await withChatLock(
         String(job.data.telegramChatId),
         job.data.messageThreadId,
@@ -128,16 +148,18 @@ export const createAgentTurnWorker = () =>
                 ? { replyToMessageId: job.data.replyToMessageId }
                 : {}),
             });
-            await sendApprovalCards({
-              chatId: String(job.data.telegramChatId),
-              ...(typeof job.data.messageThreadId === "number"
-                ? { messageThreadId: job.data.messageThreadId }
-                : {}),
-              ...(typeof job.data.replyToMessageId === "number"
-                ? { replyToMessageId: job.data.replyToMessageId }
-                : {}),
-              approvals: result.approvals,
-            });
+            if (env.APPROVAL_UX_V2_ENABLED) {
+              await sendApprovalCards({
+                chatId: String(job.data.telegramChatId),
+                ...(typeof job.data.messageThreadId === "number"
+                  ? { messageThreadId: job.data.messageThreadId }
+                  : {}),
+                ...(typeof job.data.replyToMessageId === "number"
+                  ? { replyToMessageId: job.data.replyToMessageId }
+                  : {}),
+                approvals: result.approvals,
+              });
+            }
 
             await touchSession(job.data.sessionId);
           } catch (error) {

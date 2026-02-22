@@ -25,8 +25,10 @@ type TurnExecutionResult = {
   responseText: string;
   approvals: Array<{
     approvalId: string;
+    callbackToken: string;
     toolName: string;
     toolCallId: string;
+    riskProfile: "cautious" | "balanced" | "advanced";
     expiresAt: Date;
     inputJson: unknown;
   }>;
@@ -69,6 +71,8 @@ const buildSystemPrompt = (input: {
   network: "mainnet" | "testnet";
   chatType: string;
   walletAddress?: string;
+  responseStyle: "concise" | "detailed";
+  riskProfile: "cautious" | "balanced" | "advanced";
 }) =>
   [
     "You are a production TON assistant in Telegram.",
@@ -86,6 +90,14 @@ const buildSystemPrompt = (input: {
     "If an operation requires approval, wait for tool approval flow and do not retry denied actions.",
     "After an approved callback, execute the approved action and return execution status.",
     "Never ask for approval in plain text. Approval requests must only be emitted via tool-approval-request.",
+    input.responseStyle === "concise"
+      ? "Response style: concise. Keep answers short and action-focused."
+      : "Response style: detailed. Include rationale, caveats, and concise next steps.",
+    input.riskProfile === "cautious"
+      ? "Risk profile: cautious. Prefer explicit warnings and conservative guidance for value movement."
+      : input.riskProfile === "advanced"
+        ? "Risk profile: advanced. Assume technical user context; keep risk language compact but accurate."
+        : "Risk profile: balanced. Provide practical warnings without overloading the response.",
   ].join("\n");
 
 const collectToolApprovalParts = (messages: ModelMessage[]) => {
@@ -189,6 +201,8 @@ const executeWithProviderFallback = async (input: {
       instructions: buildSystemPrompt({
         network: input.request.network,
         chatType: input.request.chatType,
+        responseStyle: input.request.responseStyle,
+        riskProfile: input.request.riskProfile,
         ...(input.request.walletAddress
           ? { walletAddress: input.request.walletAddress }
           : {}),
@@ -365,6 +379,11 @@ export const executeAgentTurn = async (
       },
     })),
     correlationId: request.correlationId,
+    telegramChatId: String(request.telegramChatId),
+    ...(typeof request.messageThreadId === "number"
+      ? { messageThreadId: request.messageThreadId }
+      : {}),
+    riskProfile: request.riskProfile,
   });
 
   if (providerExecution.usedFallback) {
@@ -443,8 +462,10 @@ export const executeAgentTurn = async (
     responseText: resolvedResponse.text,
     approvals: approvals.map((item) => ({
       approvalId: item.approvalId,
+      callbackToken: item.callbackToken,
       toolName: item.toolName,
       toolCallId: item.toolCallId,
+      riskProfile: item.riskProfile,
       expiresAt: item.expiresAt,
       inputJson: item.inputJson,
     })),
