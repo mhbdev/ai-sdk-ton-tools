@@ -5,8 +5,6 @@ import { toE2BErrorResponse } from "@/lib/e2b/errors";
 import { getSandbox } from "@/lib/e2b/sandbox";
 import { ChatSDKError } from "@/lib/errors";
 
-export const runtime = "nodejs";
-
 export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
