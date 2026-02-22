@@ -6,7 +6,11 @@ import { getBot } from "@/telegram/bot";
 import { getEnv } from "@/config/env";
 import { assertDatabaseSchemaCompatibility } from "@/db/schema-compat";
 import { getQueueHealth } from "@/queue/health";
-import { markProcessedUpdateStatus, getProcessedUpdateById } from "@/db/queries";
+import {
+  markProcessedUpdateStatus,
+  getProcessedUpdateById,
+  listReceivedUpdatesForEnqueueRecovery,
+} from "@/db/queries";
 import { sql } from "@/db/client";
 import { logger } from "@/observability/logger";
 import { redis } from "@/queue/connection";
@@ -29,6 +33,8 @@ type StartRuntimeArgs = {
 
 const TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS = 8;
 const TELEGRAM_BOOTSTRAP_RETRY_BASE_DELAY_MS = 750;
+const RECEIVED_UPDATE_RECOVERY_INTERVAL_MS = 5_000;
+const RECEIVED_UPDATE_RECOVERY_BATCH_SIZE = 200;
 
 const isTransientTelegramNetworkError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -155,6 +161,8 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const approvalCountdownWorker = createApprovalCountdownWorker();
   const approvalTimeoutWorker = createApprovalTimeoutWorker();
   const deadLetterWorker = createDeadLetterWorker();
+  let receivedUpdateRecoveryTimer: ReturnType<typeof setInterval> | null = null;
+  let receivedUpdateRecoveryInFlight = false;
 
   const registerWorkerLogging = () => {
     const workers = [
@@ -166,12 +174,86 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
     ];
     for (const worker of workers) {
       worker.on("failed", (job, error) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (
+          worker.name === "agent-turns" &&
+          /Unable to acquire chat lock for chat/i.test(errorMessage)
+        ) {
+          logger.warn("Agent turn deferred due to chat lock contention.", {
+            worker: worker.name,
+            jobId: job?.id,
+            attemptsMade: job?.attemptsMade,
+            maxAttempts: job?.opts.attempts,
+            error: errorMessage,
+          });
+          return;
+        }
+
         logger.error("Worker job failed.", {
           worker: worker.name,
           jobId: job?.id,
-          error: String(error),
+          attemptsMade: job?.attemptsMade,
+          maxAttempts: job?.opts.attempts,
+          error: errorMessage,
         });
       });
+    }
+  };
+
+  const recoverReceivedUpdates = async () => {
+    if (receivedUpdateRecoveryInFlight) {
+      return;
+    }
+    receivedUpdateRecoveryInFlight = true;
+    try {
+      const pendingUpdates = await listReceivedUpdatesForEnqueueRecovery(
+        RECEIVED_UPDATE_RECOVERY_BATCH_SIZE,
+      );
+      if (pendingUpdates.length === 0) {
+        return;
+      }
+
+      logger.warn("Attempting recovery for persisted updates waiting on queue enqueue.", {
+        pendingCount: pendingUpdates.length,
+      });
+
+      for (const pendingUpdate of pendingUpdates) {
+        const updateId = Number(pendingUpdate.telegramUpdateId);
+        if (!Number.isInteger(updateId)) {
+          logger.error("Skipping invalid update id during enqueue recovery.", {
+            telegramUpdateId: pendingUpdate.telegramUpdateId,
+          });
+          continue;
+        }
+
+        try {
+          await enqueueUpdate({
+            updateId,
+            correlationId: `recover-${updateId}-${Date.now()}`,
+          });
+          await markProcessedUpdateStatus({
+            updateId,
+            status: "enqueued",
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.warn("Enqueue recovery attempt failed; will retry.", {
+            updateId,
+            error: message,
+          });
+          await markProcessedUpdateStatus({
+            updateId,
+            status: "received",
+            error: message,
+          }).catch(() => undefined);
+        }
+      }
+    } catch (error) {
+      logger.warn("Received update recovery loop failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      receivedUpdateRecoveryInFlight = false;
     }
   };
 
@@ -262,6 +344,11 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
           });
         });
 
+        if (receivedUpdateRecoveryTimer) {
+          clearInterval(receivedUpdateRecoveryTimer);
+          receivedUpdateRecoveryTimer = null;
+        }
+
         await Promise.allSettled([
           app.close(),
           updateWorker.close(),
@@ -302,6 +389,10 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
 
   try {
     await startTelegramRuntime();
+    await recoverReceivedUpdates();
+    receivedUpdateRecoveryTimer = setInterval(() => {
+      void recoverReceivedUpdates();
+    }, RECEIVED_UPDATE_RECOVERY_INTERVAL_MS);
 
     const port = Number(process.env.PORT ?? 8787);
     await app.listen({

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { processedUpdates } from "@/db/schema";
 import type { ProcessedUpdateStatus } from "@/types/contracts";
@@ -50,11 +50,22 @@ export const markProcessedUpdateStatus = async (input: {
       handledAt:
         input.status === "processed" || input.status === "failed"
           ? new Date()
-          : undefined,
-      error: input.error,
+          : null,
+      error: input.error ?? null,
     })
     .where(eq(processedUpdates.telegramUpdateId, String(input.updateId)));
 };
+
+export const listReceivedUpdatesForEnqueueRecovery = async (limit = 100) =>
+  db
+    .select({
+      telegramUpdateId: processedUpdates.telegramUpdateId,
+      receivedAt: processedUpdates.receivedAt,
+    })
+    .from(processedUpdates)
+    .where(eq(processedUpdates.status, "received"))
+    .orderBy(asc(processedUpdates.receivedAt))
+    .limit(limit);
 
 export const getProcessedUpdateById = async (updateId: number) => {
   const [row] = await db

@@ -2,9 +2,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { logger } from "@/observability/logger";
 import { redis } from "@/queue/connection";
 
-const LOCK_TTL_MS = 15_000;
-const LOCK_RETRY_MAX = 20;
-const LOCK_RETRY_DELAY_MS = 120;
+// Agent turns can take tens of seconds when tool calls and approvals are involved.
+// Keep lock ownership long enough and wait patiently for in-chat serialization.
+const LOCK_TTL_MS = 90_000;
+const LOCK_RETRY_MAX = 60;
+const LOCK_RETRY_DELAY_MS = 250;
 
 const lockKeyForConversation = (chatId: string, messageThreadId?: number) =>
   typeof messageThreadId === "number"
@@ -58,7 +60,7 @@ export const withChatLock = async <T>(
 
   const heartbeat = setInterval(() => {
     void renewLock();
-  }, 5_000);
+  }, 10_000);
 
   try {
     return await work();
