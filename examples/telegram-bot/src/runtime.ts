@@ -1,4 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import Fastify from "fastify";
 import { GrammyError } from "grammy";
 import type { TelemetryHandle } from "@/observability/telemetry";
@@ -35,8 +37,9 @@ const TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS = 8;
 const TELEGRAM_BOOTSTRAP_RETRY_BASE_DELAY_MS = 750;
 const RECEIVED_UPDATE_RECOVERY_INTERVAL_MS = 5_000;
 const RECEIVED_UPDATE_RECOVERY_BATCH_SIZE = 200;
-const TONCONNECT_ICON_PNG_BASE64 =
+const TONCONNECT_ICON_DEFAULT_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAAR0lEQVR42u3PQQ0AIAzAMMC/5yFjRxMFPXp2zQAAAPBf1S0W2gV2mQkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4F8M6vQBAzQ2m0QAAAAASUVORK5CYII=";
+const TONCONNECT_ICON_PATH_SEGMENTS = ["public", "tonconnect-icon.png"] as const;
 
 const isTransientTelegramNetworkError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -89,6 +92,19 @@ const throwTelegramAuthHint = (error: unknown): never => {
   throw error;
 };
 
+const loadTonConnectIconPng = async () => {
+  const iconPath = resolve(process.cwd(), ...TONCONNECT_ICON_PATH_SEGMENTS);
+  try {
+    return await readFile(iconPath);
+  } catch (error) {
+    logger.warn("TonConnect icon file not found; using embedded fallback.", {
+      iconPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return Buffer.from(TONCONNECT_ICON_DEFAULT_PNG_BASE64, "base64");
+  }
+};
+
 export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const env = getEnv();
   await assertDatabaseSchemaCompatibility();
@@ -100,6 +116,7 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
     normalizedAppBaseUrl,
   ).toString();
   const tonConnectIconUrl = new URL("tonconnect-icon.png", normalizedAppBaseUrl).toString();
+  const tonConnectIconPng = await loadTonConnectIconPng();
   const app = Fastify({
     logger: false,
   });
@@ -107,11 +124,10 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   registerWebhookRoute(app);
 
   app.get("/tonconnect-icon.png", async (_request, reply) => {
-    const iconPng = Buffer.from(TONCONNECT_ICON_PNG_BASE64, "base64");
     return reply
       .header("content-type", "image/png")
       .header("cache-control", "public, max-age=86400")
-      .send(iconPng);
+      .send(tonConnectIconPng);
   });
 
   app.get("/tonconnect-manifest.json", async () => ({

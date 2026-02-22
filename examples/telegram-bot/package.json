@@ -17,8 +17,6 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:migrate:local": "node --env-file=.env.local --import tsx src/db/migrate.ts",
-    "db:repair": "tsx src/db/repair.ts",
-    "db:repair:local": "node --env-file=.env.local --import tsx src/db/repair.ts",
     "infra:local:up": "docker compose -f docker-compose.local.yml --env-file .env.local.infra up -d",
     "infra:local:tools": "docker compose -f docker-compose.local.yml --env-file .env.local.infra --profile tools up -d",
     "infra:local:down": "docker compose -f docker-compose.local.yml --env-file .env.local.infra down",

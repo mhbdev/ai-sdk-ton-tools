@@ -144,6 +144,29 @@ const createMessageUpdate = (text: string) =>
     },
   }) as Update;
 
+const createWalletStatusCallbackUpdate = (sessionId: string) =>
+  ({
+    update_id: 2,
+    callback_query: {
+      id: "cb-wallet-status",
+      from: {
+        id: 123,
+        first_name: "Test",
+        is_bot: false,
+      },
+      message: {
+        message_id: 51,
+        date: 1,
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        text: "Wallet status",
+      },
+      data: `wallet:status:${sessionId}`,
+    },
+  }) as Update;
+
 describe("router rate-limit integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -198,6 +221,10 @@ describe("router rate-limit integration", () => {
     mocks.maybeCreateTopicForPrompt.mockResolvedValue({
       messageThreadId: undefined,
       created: false,
+    });
+    mocks.getWalletConnectFlowStatus.mockResolvedValue({
+      status: "none",
+      message: "No wallet is connected. Run /wallet connect.",
     });
   });
 
@@ -266,5 +293,31 @@ describe("router rate-limit integration", () => {
     expect(mocks.checkUserTurnQuota).toHaveBeenCalledTimes(1);
     expect(result.shouldQueueTurn).toBe(true);
     expect(result.turnRequest?.text).toBe("/foo");
+  });
+
+  it("re-sends wallet launch button for pending wallet status callback", async () => {
+    const connectUrl = "https://app.tonkeeper.com/ton-connect/mock-link";
+    mocks.getWalletConnectFlowStatus.mockResolvedValue({
+      status: "pending",
+      message: "Still waiting for wallet approval (597s remaining).",
+      connectUrl,
+    });
+
+    const result = await routeUpdate(createWalletStatusCallbackUpdate("session-1"));
+
+    expect(result.shouldQueueTurn).toBe(false);
+    expect(mocks.botSendMessage).toHaveBeenCalledTimes(1);
+    const call = mocks.botSendMessage.mock.calls[0];
+    expect(call?.[1]).toContain("Still waiting for wallet approval");
+
+    const options = (call?.[2] ?? {}) as {
+      reply_markup?: {
+        inline_keyboard?: Array<Array<{ text?: string; url?: string; callback_data?: string }>>;
+      };
+    };
+    const firstButton = options.reply_markup?.inline_keyboard?.[0]?.[0];
+    expect(firstButton?.text).toBe("Open Wallet App");
+    expect(firstButton?.url).toBe(connectUrl);
+    expect(mocks.sendTelegramText).not.toHaveBeenCalled();
   });
 });

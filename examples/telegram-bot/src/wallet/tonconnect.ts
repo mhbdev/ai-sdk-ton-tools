@@ -45,6 +45,7 @@ type PendingWalletConnectSession = {
   nonce: string;
   expiresAtMs: number;
   connector: TonConnect;
+  connectUrl: string | null;
   connectAbortController: AbortController;
   unsubscribe: () => void;
   expiryTimer: NodeJS.Timeout;
@@ -53,9 +54,10 @@ type PendingWalletConnectSession = {
   finalizePromise: Promise<void> | null;
 };
 
-type WalletConnectFlowStatus = {
+export type WalletConnectFlowStatus = {
   status: "connected" | "pending" | "expired" | "cancelled" | "none" | "failed";
   message: string;
+  connectUrl?: string;
 };
 
 const WALLET_CONNECT_TTL_MS = 10 * 60 * 1000;
@@ -341,6 +343,7 @@ const failAndCloseWalletConnectSession = async (
     tonConnectNonce: null,
     tonConnectNonceIssuedAt: null,
     tonConnectNonceExpiresAt: null,
+    tonConnectConnectUrl: null,
   });
   await sendTelegramText(pending.telegramChatId, message, {
     ...(typeof pending.messageThreadId === "number"
@@ -397,6 +400,7 @@ const finalizeWalletConnectSession = async (pending: PendingWalletConnectSession
       tonConnectNonce: null,
       tonConnectNonceIssuedAt: null,
       tonConnectNonceExpiresAt: null,
+      tonConnectConnectUrl: null,
     });
     await sendTelegramText(
       pending.telegramChatId,
@@ -487,6 +491,7 @@ export const beginWalletConnectFlow = async (input: {
     nonce,
     expiresAtMs,
     connector,
+    connectUrl: null,
     connectAbortController,
     unsubscribe: () => undefined,
     expiryTimer,
@@ -541,12 +546,14 @@ export const beginWalletConnectFlow = async (input: {
       throw new Error("TonConnect did not return a universal connection link.");
     }
     connectUrl = generatedLink;
+    pending.connectUrl = connectUrl;
 
     await patchSessionState(input.sessionId, {
       tonConnectStatus: "pending",
       tonConnectNonce: nonce,
       tonConnectNonceIssuedAt: new Date().toISOString(),
       tonConnectNonceExpiresAt: new Date(expiresAtMs).toISOString(),
+      tonConnectConnectUrl: connectUrl,
       tonConnectCorrelationId: input.correlationId,
       tonConnectLastError: null,
     });
@@ -567,6 +574,7 @@ export const beginWalletConnectFlow = async (input: {
       tonConnectNonce: null,
       tonConnectNonceIssuedAt: null,
       tonConnectNonceExpiresAt: null,
+      tonConnectConnectUrl: null,
     });
     throw new Error(message);
   }
@@ -631,6 +639,15 @@ export const getWalletConnectFlowStatus = async (input: {
     const remainingSeconds = Number.isFinite(expiresAtMs)
       ? Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000))
       : 0;
+    const stateConnectUrl =
+      typeof state.tonConnectConnectUrl === "string" &&
+      state.tonConnectConnectUrl.length > 0
+        ? state.tonConnectConnectUrl
+        : undefined;
+    const connectUrl =
+      typeof pending?.connectUrl === "string" && pending.connectUrl.length > 0
+        ? pending.connectUrl
+        : stateConnectUrl;
 
     return {
       status: "pending",
@@ -638,6 +655,7 @@ export const getWalletConnectFlowStatus = async (input: {
         remainingSeconds > 0
           ? `Still waiting for wallet approval (${remainingSeconds}s remaining).`
           : "Still waiting for wallet approval. You can run /wallet connect again.",
+      ...(typeof connectUrl === "string" ? { connectUrl } : {}),
     };
   }
 
@@ -691,6 +709,7 @@ export const cancelWalletConnectFlow = async (input: {
     tonConnectNonce: null,
     tonConnectNonceIssuedAt: null,
     tonConnectNonceExpiresAt: null,
+    tonConnectConnectUrl: null,
   });
 
   return {
@@ -721,6 +740,7 @@ export const expireWalletConnectFlow = async (input: {
     tonConnectNonce: null,
     tonConnectNonceIssuedAt: null,
     tonConnectNonceExpiresAt: null,
+    tonConnectConnectUrl: null,
   });
   await sendTelegramText(
     pending.telegramChatId,

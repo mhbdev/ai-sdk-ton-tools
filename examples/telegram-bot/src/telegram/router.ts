@@ -228,6 +228,50 @@ const sendWalletConnectPrompt = async (input: {
   });
 };
 
+type WalletConnectStatus = Awaited<ReturnType<typeof getWalletConnectFlowStatus>>;
+
+const sendWalletConnectStatus = async (input: {
+  telegramChatId: string;
+  sessionId: string;
+  status: WalletConnectStatus;
+  messageThreadId?: number;
+  replyToMessageId?: number;
+}) => {
+  if (
+    input.status.status === "pending" &&
+    typeof input.status.connectUrl === "string" &&
+    input.status.connectUrl.length > 0
+  ) {
+    const keyboard = new InlineKeyboard()
+      .url("Open Wallet App", input.status.connectUrl)
+      .row()
+      .text("Check Status", `wallet:status:${input.sessionId}`)
+      .text("Cancel", `wallet:cancel:${input.sessionId}`);
+
+    await sendTelegramKeyboardMessage({
+      telegramChatId: input.telegramChatId,
+      text: input.status.message,
+      keyboard,
+      ...(typeof input.messageThreadId === "number"
+        ? { messageThreadId: input.messageThreadId }
+        : {}),
+      ...(typeof input.replyToMessageId === "number"
+        ? { replyToMessageId: input.replyToMessageId }
+        : {}),
+    });
+    return;
+  }
+
+  await sendTelegramText(input.telegramChatId, input.status.message, {
+    ...(typeof input.messageThreadId === "number"
+      ? { messageThreadId: input.messageThreadId }
+      : {}),
+    ...(typeof input.replyToMessageId === "number"
+      ? { replyToMessageId: input.replyToMessageId }
+      : {}),
+  });
+};
+
 const buildSettingsView = (input: {
   screen: SettingsScreen;
   prefs: ResolvedPreferences;
@@ -901,15 +945,17 @@ const handleSettingsCallback = async (input: {
             telegramUserId: input.telegramUserId,
             telegramChatId: input.telegramChatId,
           });
-          await sendTelegramText(
-            input.telegramChatId,
-            status.message,
-            {
-              ...(typeof input.messageThreadId === "number"
-                ? { messageThreadId: input.messageThreadId }
-                : {}),
-            },
-          );
+          await sendWalletConnectStatus({
+            telegramChatId: input.telegramChatId,
+            sessionId: session.id,
+            status,
+            ...(typeof input.messageThreadId === "number"
+              ? { messageThreadId: input.messageThreadId }
+              : {}),
+            ...(typeof input.callbackMessageId === "number"
+              ? { replyToMessageId: input.callbackMessageId }
+              : {}),
+          });
         }
       }
     }
@@ -976,7 +1022,10 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
           telegramUserId,
           telegramChatId,
         });
-        await sendTelegramText(telegramChatId, status.message, {
+        await sendWalletConnectStatus({
+          telegramChatId,
+          sessionId,
+          status,
           ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
           ...(typeof callbackMessageId === "number"
             ? { replyToMessageId: callbackMessageId }
@@ -1299,15 +1348,17 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
           telegramUserId,
           telegramChatId,
         });
-        await sendTelegramText(
+        await sendWalletConnectStatus({
           telegramChatId,
-          status.message,
-          {
-            ...(typeof effectiveMessageThreadId === "number"
-              ? { messageThreadId: effectiveMessageThreadId }
-              : {}),
-          },
-        );
+          sessionId: session.id,
+          status,
+          ...(typeof effectiveMessageThreadId === "number"
+            ? { messageThreadId: effectiveMessageThreadId }
+            : {}),
+          ...(typeof sourceMessageId === "number"
+            ? { replyToMessageId: sourceMessageId }
+            : {}),
+        });
       }
       return { shouldQueueTurn: false };
     }
@@ -1318,9 +1369,15 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
         telegramUserId,
         telegramChatId,
       });
-      await sendTelegramText(telegramChatId, status.message, {
+      await sendWalletConnectStatus({
+        telegramChatId,
+        sessionId: session.id,
+        status,
         ...(typeof effectiveMessageThreadId === "number"
           ? { messageThreadId: effectiveMessageThreadId }
+          : {}),
+        ...(typeof sourceMessageId === "number"
+          ? { replyToMessageId: sourceMessageId }
           : {}),
       });
       return { shouldQueueTurn: false };
