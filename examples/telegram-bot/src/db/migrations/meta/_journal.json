@@ -8,6 +8,13 @@
       "when": 1771762490279,
       "tag": "0000_watery_triton",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771783500000,
+      "tag": "0001_topic_sessions",
+      "breakpoints": true
     }
   ]
 }

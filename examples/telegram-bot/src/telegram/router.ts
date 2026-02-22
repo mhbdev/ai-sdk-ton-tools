@@ -4,6 +4,7 @@ import { decideApproval } from "@/approvals/service";
 import {
   getActiveWallet,
   getOrCreateSession,
+  getSessionById,
   getTelegramChat,
   setChatNetwork,
   touchSession,
@@ -12,6 +13,7 @@ import {
 } from "@/db/queries";
 import { sendTelegramText } from "@/telegram/bot";
 import type { ChatType, TurnExecutionRequest, UpdateProcessingResult } from "@/types/contracts";
+import { maybeCreateTopicForPrompt } from "@/telegram/topics";
 import {
   issueWalletConnectChallenge,
   parseProofPayloadFromCommand,
@@ -39,6 +41,15 @@ const parseCommand = (text: string) => {
   };
 };
 
+const parseMessageThreadId = (message: unknown): number | undefined => {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const threadId = (message as { message_thread_id?: unknown }).message_thread_id;
+  return typeof threadId === "number" ? threadId : undefined;
+};
+
 export const routeUpdate = async (update: Update): Promise<UpdateProcessingResult> => {
   const callbackQuery = update.callback_query;
   if (
@@ -61,12 +72,7 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
     const correlationId = createCorrelationId();
     const telegramUserId = String(callbackQuery.from.id);
     const telegramChatId = String(callbackQuery.message.chat.id);
-
-    const session = await getOrCreateSession({
-      telegramChatId,
-      telegramUserId,
-    });
-    await touchSession(session.id);
+    const messageThreadId = parseMessageThreadId(callbackQuery.message);
 
     const decision = await decideApproval({
       approvalId,
@@ -79,9 +85,27 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
     });
 
     if (!decision.ok) {
-      await sendTelegramText(telegramChatId, `Approval not applied: ${decision.reason}`);
+      await sendTelegramText(telegramChatId, `Approval not applied: ${decision.reason}`, {
+        ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
+      });
       return { shouldQueueTurn: false };
     }
+    if (!decision.approval) {
+      await sendTelegramText(telegramChatId, "Approval not applied: missing approval.", {
+        ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
+      });
+      return { shouldQueueTurn: false };
+    }
+
+    let session = await getSessionById(decision.approval.sessionId);
+    if (!session) {
+      session = await getOrCreateSession({
+        telegramChatId,
+        telegramUserId,
+        ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
+      });
+    }
+    await touchSession(session.id);
 
     const chat = await getTelegramChat(telegramChatId);
     const activeWallet = await getActiveWallet(telegramUserId);
@@ -90,6 +114,7 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
       sessionId: session.id,
       telegramUserId: Number(telegramUserId),
       telegramChatId: Number(telegramChatId),
+      ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
       chatType: (chat?.chatType ?? "private") as ChatType,
       text: "",
       network: (chat?.network ?? "mainnet") as "mainnet" | "testnet",
@@ -123,6 +148,10 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
   const telegramUserId = String(from.id);
   const telegramChatId = String(message.chat.id);
   const chatType = parseChatType(message.chat.type);
+  const messageThreadId = parseMessageThreadId(message);
+  const { command, args } = parseCommand(message.text);
+  const turnCorrelationId = createCorrelationId();
+  let effectiveMessageThreadId = messageThreadId;
 
   const allowedUserRate = await checkAndIncrementRateLimit({
     key: `user:${telegramUserId}`,
@@ -138,6 +167,9 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
     await sendTelegramText(
       telegramChatId,
       "Rate limit exceeded. Please wait and try again.",
+      {
+        ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
+      },
     );
     return { shouldQueueTurn: false };
   }
@@ -155,13 +187,29 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
     modelId: process.env.AI_MODEL ?? "openai/gpt-5.2",
   });
 
+  if (!command.startsWith("/")) {
+    const topic = await maybeCreateTopicForPrompt({
+      telegramChatId,
+      chatType,
+      prompt: message.text,
+      ...(typeof effectiveMessageThreadId === "number"
+        ? { existingMessageThreadId: effectiveMessageThreadId }
+        : {}),
+      correlationId: turnCorrelationId,
+    });
+    if (typeof topic.messageThreadId === "number") {
+      effectiveMessageThreadId = topic.messageThreadId;
+    }
+  }
+
   const session = await getOrCreateSession({
     telegramChatId,
     telegramUserId,
+    ...(typeof effectiveMessageThreadId === "number"
+      ? { messageThreadId: effectiveMessageThreadId }
+      : {}),
   });
   await touchSession(session.id);
-
-  const { command, args } = parseCommand(message.text);
   if (command === "/start") {
     const chat = await getTelegramChat(telegramChatId);
     await sendTelegramText(
@@ -172,6 +220,11 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
         "Use /network testnet or /network mainnet to switch networks.",
         "Use /wallet connect to start wallet link flow.",
       ].join("\n"),
+      {
+        ...(typeof effectiveMessageThreadId === "number"
+          ? { messageThreadId: effectiveMessageThreadId }
+          : {}),
+      },
     );
     return { shouldQueueTurn: false };
   }
@@ -179,11 +232,19 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
   if (command === "/network") {
     const selected = args[0];
     if (selected !== "mainnet" && selected !== "testnet") {
-      await sendTelegramText(telegramChatId, "Usage: /network mainnet|testnet");
+      await sendTelegramText(telegramChatId, "Usage: /network mainnet|testnet", {
+        ...(typeof effectiveMessageThreadId === "number"
+          ? { messageThreadId: effectiveMessageThreadId }
+          : {}),
+      });
       return { shouldQueueTurn: false };
     }
     await setChatNetwork(telegramChatId, selected);
-    await sendTelegramText(telegramChatId, `Network switched to ${selected}.`);
+    await sendTelegramText(telegramChatId, `Network switched to ${selected}.`, {
+      ...(typeof effectiveMessageThreadId === "number"
+        ? { messageThreadId: effectiveMessageThreadId }
+        : {}),
+    });
     return { shouldQueueTurn: false };
   }
 
@@ -193,10 +254,18 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
       const challenge = await issueWalletConnectChallenge({
         telegramChatId,
         telegramUserId,
+        ...(typeof effectiveMessageThreadId === "number"
+          ? { messageThreadId: effectiveMessageThreadId }
+          : {}),
       });
       await sendTelegramText(
         telegramChatId,
         `Wallet connection challenge created.\n${challenge.connectHint}`,
+        {
+          ...(typeof effectiveMessageThreadId === "number"
+            ? { messageThreadId: effectiveMessageThreadId }
+            : {}),
+        },
       );
       return { shouldQueueTurn: false };
     }
@@ -207,6 +276,11 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
         await sendTelegramText(
           telegramChatId,
           "Usage: /wallet prove <base64-encoded-proof-json>",
+          {
+            ...(typeof effectiveMessageThreadId === "number"
+              ? { messageThreadId: effectiveMessageThreadId }
+              : {}),
+          },
         );
         return { shouldQueueTurn: false };
       }
@@ -219,11 +293,21 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
         await sendTelegramText(
           telegramChatId,
           `Wallet linked: ${proofPayload.address}`,
+          {
+            ...(typeof effectiveMessageThreadId === "number"
+              ? { messageThreadId: effectiveMessageThreadId }
+              : {}),
+          },
         );
       } catch (error) {
         await sendTelegramText(
           telegramChatId,
           `Wallet proof verification failed: ${(error as Error).message}`,
+          {
+            ...(typeof effectiveMessageThreadId === "number"
+              ? { messageThreadId: effectiveMessageThreadId }
+              : {}),
+          },
         );
       }
       return { shouldQueueTurn: false };
@@ -232,6 +316,11 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
     await sendTelegramText(
       telegramChatId,
       "Wallet commands:\n/wallet connect\n/wallet prove <base64-json>",
+      {
+        ...(typeof effectiveMessageThreadId === "number"
+          ? { messageThreadId: effectiveMessageThreadId }
+          : {}),
+      },
     );
     return { shouldQueueTurn: false };
   }
@@ -240,6 +329,11 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
     await sendTelegramText(
       telegramChatId,
       "Cancelled pending operation context. You can continue with a new request.",
+      {
+        ...(typeof effectiveMessageThreadId === "number"
+          ? { messageThreadId: effectiveMessageThreadId }
+          : {}),
+      },
     );
     return { shouldQueueTurn: false };
   }
@@ -247,10 +341,13 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
   const chat = await getTelegramChat(telegramChatId);
   const activeWallet = await getActiveWallet(telegramUserId);
   const turnRequest: TurnExecutionRequest = {
-    correlationId: createCorrelationId(),
+    correlationId: turnCorrelationId,
     sessionId: session.id,
     telegramUserId: Number(telegramUserId),
     telegramChatId: Number(telegramChatId),
+    ...(typeof effectiveMessageThreadId === "number"
+      ? { messageThreadId: effectiveMessageThreadId }
+      : {}),
     chatType,
     text: message.text,
     network: (chat?.network ?? "mainnet") as "mainnet" | "testnet",

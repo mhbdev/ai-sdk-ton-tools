@@ -4,6 +4,8 @@ Production-grade Telegram bot service for TON tools with:
 - `grammY` transport (webhook and polling modes)
 - AI SDK `ToolLoopAgent`
 - OpenRouter as primary model provider with AI Gateway fallback
+- Telegram native draft-style streaming responses (`sendMessageDraft`)
+- thread/topic auto-creation with LLM-generated title + emoji for new prompts
 - strict approval workflow for critical actions
 - queue-based processing with idempotency
 - PostgreSQL persistence + Redis queues/locks
@@ -91,6 +93,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 - Optional fallback provider: AI Gateway (`AI_GATEWAY_API_KEY`)
 - Default model selector: `AI_MODEL`
 - Optional dedicated fallback model (used only when AI Gateway key is set): `AI_GATEWAY_FALLBACK_MODEL`
+- Topic naming model: `AI_TOPIC_MODEL` (low-cost model recommended)
+
+## Native AI Chat UX
+
+- Draft streaming is controlled by `TELEGRAM_ENABLE_STREAM_DRAFTS`.
+- Topic auto-create is controlled by `TOPIC_AUTOCREATE_ENABLED`.
+- Per Telegram Bot API behavior, draft streaming is used for private chats only and requires bot topics mode.
 
 ## OpenTelemetry Endpoint
 

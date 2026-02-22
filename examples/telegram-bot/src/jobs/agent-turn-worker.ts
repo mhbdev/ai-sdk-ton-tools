@@ -7,10 +7,11 @@ import { withChatLock } from "@/locks/chat-lock";
 import { logger } from "@/observability/logger";
 import { bullConnection } from "@/queue/connection";
 import { deadLetterQueue } from "@/queue/queues";
-import { sendTelegramText } from "@/telegram/bot";
+import { getBot, sendTelegramText, streamTelegramDraftText } from "@/telegram/bot";
 
 const sendApprovalCards = async (input: {
   chatId: string;
+  messageThreadId?: number;
   approvals: Array<{
     approvalId: string;
     toolName: string;
@@ -23,7 +24,6 @@ const sendApprovalCards = async (input: {
     return;
   }
 
-  const { getBot } = await import("@/telegram/bot");
   const bot = getBot();
   for (const approval of input.approvals) {
     const keyboard = new InlineKeyboard()
@@ -39,6 +39,9 @@ const sendApprovalCards = async (input: {
         expiresAt: approval.expiresAt,
       }),
       {
+        ...(typeof input.messageThreadId === "number"
+          ? { message_thread_id: input.messageThreadId }
+          : {}),
         reply_markup: keyboard,
       },
     );
@@ -49,35 +52,73 @@ export const createAgentTurnWorker = () =>
   new Worker(
     "agent-turns",
     async (job) => {
-      await withChatLock(String(job.data.telegramChatId), async () => {
-        try {
-          const result = await executeAgentTurn(job.data);
+      await withChatLock(
+        String(job.data.telegramChatId),
+        job.data.messageThreadId,
+        async () => {
+          const bot = getBot();
+          const sendTypingAction = async () =>
+            bot.api.sendChatAction(Number(job.data.telegramChatId), "typing", {
+              ...(typeof job.data.messageThreadId === "number"
+                ? { message_thread_id: job.data.messageThreadId }
+                : {}),
+            });
 
-          await sendTelegramText(String(job.data.telegramChatId), result.responseText);
-          await sendApprovalCards({
-            chatId: String(job.data.telegramChatId),
-            approvals: result.approvals,
-          });
+          await sendTypingAction().catch(() => undefined);
+          const typingInterval = setInterval(() => {
+            void sendTypingAction().catch(() => undefined);
+          }, 4_000);
 
-          await touchSession(job.data.sessionId);
-        } catch (error) {
-          await deadLetterQueue.add("deadletter-agent-turn" as const, {
-            queue: "agent-turns",
-            payload: job.data,
-            reason: (error as Error).message,
-            correlationId: job.data.correlationId,
-          });
-          logger.error("Agent turn failed.", {
-            correlationId: job.data.correlationId,
-            error: String(error),
-          });
-          await sendTelegramText(
-            String(job.data.telegramChatId),
-            "I could not complete that request. Please try again.",
-          );
-          throw error;
-        }
-      });
+          try {
+            const result = await executeAgentTurn(job.data);
+
+            await streamTelegramDraftText(String(job.data.telegramChatId), result.responseText, {
+              ...(typeof job.data.messageThreadId === "number"
+                ? { messageThreadId: job.data.messageThreadId }
+                : {}),
+              draftSeed: job.data.correlationId,
+              chatType: job.data.chatType,
+            });
+            await sendTelegramText(String(job.data.telegramChatId), result.responseText, {
+              ...(typeof job.data.messageThreadId === "number"
+                ? { messageThreadId: job.data.messageThreadId }
+                : {}),
+            });
+            await sendApprovalCards({
+              chatId: String(job.data.telegramChatId),
+              ...(typeof job.data.messageThreadId === "number"
+                ? { messageThreadId: job.data.messageThreadId }
+                : {}),
+              approvals: result.approvals,
+            });
+
+            await touchSession(job.data.sessionId);
+          } catch (error) {
+            await deadLetterQueue.add("deadletter-agent-turn" as const, {
+              queue: "agent-turns",
+              payload: job.data,
+              reason: (error as Error).message,
+              correlationId: job.data.correlationId,
+            });
+            logger.error("Agent turn failed.", {
+              correlationId: job.data.correlationId,
+              error: String(error),
+            });
+            await sendTelegramText(
+              String(job.data.telegramChatId),
+              "I could not complete that request. Please try again.",
+              {
+                ...(typeof job.data.messageThreadId === "number"
+                  ? { messageThreadId: job.data.messageThreadId }
+                  : {}),
+              },
+            );
+            throw error;
+          } finally {
+            clearInterval(typingInterval);
+          }
+        },
+      );
     },
     {
       connection: bullConnection,

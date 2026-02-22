@@ -31,10 +31,14 @@ export const createTonConnectNonce = () => randomBytes(16).toString("hex");
 export const issueWalletConnectChallenge = async (input: {
   telegramChatId: string;
   telegramUserId: string;
+  messageThreadId?: number;
 }) => {
   const session = await getOrCreateSession({
     telegramChatId: input.telegramChatId,
     telegramUserId: input.telegramUserId,
+    ...(typeof input.messageThreadId === "number"
+      ? { messageThreadId: input.messageThreadId }
+      : {}),
   });
 
   const nonce = createTonConnectNonce();

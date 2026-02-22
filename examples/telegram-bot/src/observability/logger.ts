@@ -1,42 +1,73 @@
 import { redactForLogs } from "@/security/redaction";
+import pino, { type LevelWithSilent, type Logger as PinoLogger } from "pino";
 
-type LogLevel = "debug" | "info" | "warn" | "error";
+type LogMethod = "debug" | "info" | "warn" | "error";
 
-const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40,
+const SUPPORTED_LOG_LEVELS: ReadonlyArray<LevelWithSilent> = [
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
+  "silent",
+];
+
+const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+
+const asLogLevel = (value: string | undefined): LevelWithSilent => {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized && SUPPORTED_LOG_LEVELS.includes(normalized as LevelWithSilent)) {
+    return normalized as LevelWithSilent;
+  }
+  return "info";
 };
 
-const currentLogLevel: LogLevel =
-  (process.env.LOG_LEVEL as LogLevel | undefined) ?? "info";
+const isTruthy = (value: string | undefined) =>
+  value ? BOOLEAN_TRUE_VALUES.has(value.trim().toLowerCase()) : false;
 
-const shouldLog = (level: LogLevel) =>
-  LOG_LEVEL_ORDER[level] >= LOG_LEVEL_ORDER[currentLogLevel];
+const shouldUsePrettyLogs = () => {
+  if (process.env.LOG_PRETTY !== undefined) {
+    return isTruthy(process.env.LOG_PRETTY);
+  }
+  return process.env.NODE_ENV !== "production" && process.stdout.isTTY === true;
+};
 
-const emit = (level: LogLevel, message: string, metadata?: unknown) => {
-  if (!shouldLog(level)) {
+const buildPinoLogger = (): PinoLogger => {
+  const usePrettyLogs = shouldUsePrettyLogs();
+  const transport = usePrettyLogs
+    ? pino.transport({
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard",
+          ignore: "pid,hostname",
+          singleLine: false,
+        },
+      })
+    : undefined;
+
+  return pino(
+    {
+      level: asLogLevel(process.env.LOG_LEVEL),
+      timestamp: pino.stdTimeFunctions.isoTime,
+      formatters: {
+        level: (label) => ({ level: label }),
+      },
+    },
+    transport,
+  );
+};
+
+const baseLogger = buildPinoLogger();
+
+const emit = (level: LogMethod, message: string, metadata?: unknown) => {
+  if (metadata === undefined) {
+    baseLogger[level](message);
     return;
   }
 
-  const payload = {
-    level,
-    message,
-    timestamp: new Date().toISOString(),
-    ...(metadata !== undefined ? { metadata: redactForLogs(metadata) } : {}),
-  };
-
-  const line = JSON.stringify(payload);
-  if (level === "error") {
-    console.error(line);
-    return;
-  }
-  if (level === "warn") {
-    console.warn(line);
-    return;
-  }
-  console.log(line);
+  baseLogger[level]({ metadata: redactForLogs(metadata) }, message);
 };
 
 export const logger = {
@@ -47,4 +78,3 @@ export const logger = {
   error: (message: string, metadata?: unknown) =>
     emit("error", message, metadata),
 };
-

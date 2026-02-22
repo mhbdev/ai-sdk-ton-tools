@@ -35,6 +35,11 @@ export const createApprovalTimeoutWorker = () =>
         await sendTelegramText(
           session.telegramChatId,
           `Approval ${approval.approvalId} expired and was cancelled.`,
+          {
+            ...(typeof session.messageThreadId === "number"
+              ? { messageThreadId: session.messageThreadId }
+              : {}),
+          },
         );
       }
 

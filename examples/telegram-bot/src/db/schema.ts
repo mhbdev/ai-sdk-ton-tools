@@ -1,6 +1,7 @@
 import type { InferSelectModel } from "drizzle-orm";
 import {
   boolean,
+  integer,
   index,
   jsonb,
   pgEnum,
@@ -80,6 +81,7 @@ export const chatSessions = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     telegramChatId: varchar("telegram_chat_id", { length: 32 }).notNull(),
     telegramUserId: varchar("telegram_user_id", { length: 32 }).notNull(),
+    messageThreadId: integer("message_thread_id"),
     stateJson: jsonb("state_json").notNull().default({}),
     lastMessageAt: timestamp("last_message_at").notNull().defaultNow(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -89,6 +91,11 @@ export const chatSessions = pgTable(
     chatUserIdx: index("chat_sessions_chat_user_idx").on(
       table.telegramChatId,
       table.telegramUserId,
+    ),
+    chatUserThreadIdx: index("chat_sessions_chat_user_thread_idx").on(
+      table.telegramChatId,
+      table.telegramUserId,
+      table.messageThreadId,
     ),
   }),
 );
@@ -197,4 +204,3 @@ export const auditEvents = pgTable(
 );
 
 export type AuditEvent = InferSelectModel<typeof auditEvents>;
-

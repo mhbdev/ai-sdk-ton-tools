@@ -6,6 +6,10 @@ import {
   persistModelMessage,
   persistModelMessages,
 } from "@/agent/messages";
+import {
+  collectToolResultParts,
+  resolveTurnResponseText,
+} from "@/agent/response-policy";
 import { buildPolicyWrappedTonTools } from "@/agent/tool-policy";
 import { registerApprovalRequests } from "@/approvals/service";
 import { getEnv } from "@/config/env";
@@ -52,6 +56,8 @@ const buildSystemPrompt = (input: {
       ? `Linked wallet address: ${input.walletAddress}`
       : "No linked wallet address.",
     "If an operation requires approval, wait for tool approval flow and do not retry denied actions.",
+    "After an approved callback, execute the approved action and return execution status.",
+    "Never ask for approval in plain text. Approval requests must only be emitted via tool-approval-request.",
   ].join("\n");
 
 const collectToolApprovalParts = (messages: ModelMessage[]) => {
@@ -310,18 +316,38 @@ export const executeAgentTurn = async (
     usedFallback: providerExecution.usedFallback,
   });
 
-  const approvalSummary =
-    approvals.length > 0
-      ? "\n\nApproval pending for critical operation. Use the approval buttons in chat."
-      : "";
+  const toolResults = collectToolResultParts(responseMessages);
+  const resolvedResponse = resolveTurnResponseText({
+    rawText: result.text,
+    approvalsCount: approvals.length,
+    approvalWasGranted: request.approvalResponse?.approved === true,
+    toolResults,
+  });
+
+  if (resolvedResponse.forcedApprovedStatus) {
+    logger.warn("Blocked plain-text approval re-ask after approved callback.", {
+      correlationId: request.correlationId,
+      sessionId: request.sessionId,
+      provider: providerExecution.provider,
+      modelId: providerExecution.modelId,
+    });
+
+    await appendAuditEvent({
+      actorType: "system",
+      actorId: "agent",
+      eventType: "agent.turn.approval.reask_blocked",
+      correlationId: request.correlationId,
+      metadata: {
+        sessionId: request.sessionId,
+        approvals: approvals.length,
+        provider: providerExecution.provider,
+        modelId: providerExecution.modelId,
+      },
+    });
+  }
 
   return {
-    responseText:
-      result.text?.trim().length
-        ? `${result.text}${approvalSummary}`
-        : approvals.length > 0
-          ? "Action paused pending your approval."
-          : "Done.",
+    responseText: resolvedResponse.text,
     approvals: approvals.map((item) => ({
       approvalId: item.approvalId,
       toolName: item.toolName,

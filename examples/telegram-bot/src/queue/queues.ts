@@ -48,12 +48,13 @@ export const deadLetterQueue = new Queue<{
 
 export const enqueueUpdate = async (data: BotUpdateJob) =>
   updatesQueue.add("process-update" as const, data, {
-    jobId: `update:${data.updateId}`,
+    // BullMQ rejects custom job IDs that contain ":".
+    jobId: `update-${data.updateId}`,
   });
 
 export const enqueueAgentTurn = async (data: TurnExecutionRequest) =>
   agentTurnsQueue.add("execute-turn" as const, data, {
-    jobId: `turn:${data.correlationId}`,
+    jobId: `turn-${data.correlationId}`,
   });
 
 export const enqueueApprovalTimeout = async (input: {
@@ -69,7 +70,7 @@ export const enqueueApprovalTimeout = async (input: {
     },
     {
       delay: input.delayMs,
-      jobId: `approval-expire:${input.approvalId}`,
+      jobId: `approval-expire-${input.approvalId}`,
       attempts: 1,
     },
   );

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   chatSessions,
@@ -19,7 +19,19 @@ export const upsertTelegramUser = async (input: {
     ...(input.firstName ? { firstName: input.firstName } : {}),
     ...(input.locale ? { locale: input.locale } : {}),
   };
-  await db
+  const [updated] = await db
+    .update(telegramUsers)
+    .set({
+      updatedAt: now,
+      ...valuePatch,
+    })
+    .where(eq(telegramUsers.telegramUserId, input.telegramUserId))
+    .returning();
+  if (updated) {
+    return updated;
+  }
+
+  const [inserted] = await db
     .insert(telegramUsers)
     .values({
       telegramUserId: input.telegramUserId,
@@ -27,13 +39,10 @@ export const upsertTelegramUser = async (input: {
       updatedAt: now,
       ...valuePatch,
     })
-    .onConflictDoUpdate({
-      target: telegramUsers.telegramUserId,
-      set: {
-        updatedAt: now,
-        ...valuePatch,
-      },
-    });
+    .returning();
+  if (inserted) {
+    return inserted;
+  }
 
   const [row] = await db
     .select()
@@ -49,7 +58,20 @@ export const upsertTelegramChat = async (input: {
   modelId: string;
 }) => {
   const now = new Date();
-  await db
+  const [updated] = await db
+    .update(telegramChats)
+    .set({
+      chatType: input.chatType,
+      activeModel: input.modelId,
+      updatedAt: now,
+    })
+    .where(eq(telegramChats.telegramChatId, input.telegramChatId))
+    .returning();
+  if (updated) {
+    return updated;
+  }
+
+  const [inserted] = await db
     .insert(telegramChats)
     .values({
       telegramChatId: input.telegramChatId,
@@ -58,14 +80,10 @@ export const upsertTelegramChat = async (input: {
       createdAt: now,
       updatedAt: now,
     })
-    .onConflictDoUpdate({
-      target: telegramChats.telegramChatId,
-      set: {
-        chatType: input.chatType,
-        activeModel: input.modelId,
-        updatedAt: now,
-      },
-    });
+    .returning();
+  if (inserted) {
+    return inserted;
+  }
 
   const [row] = await db
     .select()
@@ -100,7 +118,13 @@ export const setChatNetwork = async (
 export const getOrCreateSession = async (input: {
   telegramChatId: string;
   telegramUserId: string;
+  messageThreadId?: number;
 }) => {
+  const scopedThreadFilter =
+    typeof input.messageThreadId === "number"
+      ? eq(chatSessions.messageThreadId, input.messageThreadId)
+      : isNull(chatSessions.messageThreadId);
+
   const existingRows = await db
     .select()
     .from(chatSessions)
@@ -108,6 +132,7 @@ export const getOrCreateSession = async (input: {
       and(
         eq(chatSessions.telegramChatId, input.telegramChatId),
         eq(chatSessions.telegramUserId, input.telegramUserId),
+        scopedThreadFilter,
       ),
     )
     .orderBy(desc(chatSessions.createdAt))
@@ -123,6 +148,8 @@ export const getOrCreateSession = async (input: {
     .values({
       telegramChatId: input.telegramChatId,
       telegramUserId: input.telegramUserId,
+      messageThreadId:
+        typeof input.messageThreadId === "number" ? input.messageThreadId : null,
       stateJson: {},
       lastMessageAt: new Date(),
       createdAt: new Date(),

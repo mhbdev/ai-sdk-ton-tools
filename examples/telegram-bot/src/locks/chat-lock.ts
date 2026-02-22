@@ -5,10 +5,17 @@ const LOCK_TTL_MS = 15_000;
 const LOCK_RETRY_MAX = 20;
 const LOCK_RETRY_DELAY_MS = 120;
 
-const lockKeyForChat = (chatId: string) => `chat:${chatId}:lock`;
+const lockKeyForConversation = (chatId: string, messageThreadId?: number) =>
+  typeof messageThreadId === "number"
+    ? `chat:${chatId}:thread:${messageThreadId}:lock`
+    : `chat:${chatId}:lock`;
 
-export const withChatLock = async <T>(chatId: string, work: () => Promise<T>) => {
-  const key = lockKeyForChat(chatId);
+export const withChatLock = async <T>(
+  chatId: string,
+  messageThreadId: number | undefined,
+  work: () => Promise<T>,
+) => {
+  const key = lockKeyForConversation(chatId, messageThreadId);
   let lockToken = "";
 
   for (let attempt = 0; attempt < LOCK_RETRY_MAX; attempt += 1) {
@@ -22,7 +29,9 @@ export const withChatLock = async <T>(chatId: string, work: () => Promise<T>) =>
   }
 
   if (!lockToken) {
-    throw new Error(`Unable to acquire chat lock for chat ${chatId}`);
+    throw new Error(
+      `Unable to acquire chat lock for chat ${chatId}${typeof messageThreadId === "number" ? ` thread ${messageThreadId}` : ""}`,
+    );
   }
 
   const heartbeat = setInterval(async () => {
@@ -42,4 +51,3 @@ export const withChatLock = async <T>(chatId: string, work: () => Promise<T>) =>
     }
   }
 };
-
