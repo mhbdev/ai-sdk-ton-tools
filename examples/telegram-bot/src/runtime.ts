@@ -4,6 +4,7 @@ import { GrammyError } from "grammy";
 import type { TelemetryHandle } from "@/observability/telemetry";
 import { getBot } from "@/telegram/bot";
 import { getEnv } from "@/config/env";
+import { assertDatabaseSchemaCompatibility } from "@/db/schema-compat";
 import { getQueueHealth } from "@/queue/health";
 import { markProcessedUpdateStatus, getProcessedUpdateById } from "@/db/queries";
 import { sql } from "@/db/client";
@@ -82,6 +83,7 @@ const throwTelegramAuthHint = (error: unknown): never => {
 
 export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const env = getEnv();
+  await assertDatabaseSchemaCompatibility();
   const normalizedAppBaseUrl = env.APP_BASE_URL.endsWith("/")
     ? env.APP_BASE_URL
     : `${env.APP_BASE_URL}/`;

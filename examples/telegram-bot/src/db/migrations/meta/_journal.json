@@ -15,6 +15,13 @@
       "when": 1771783500000,
       "tag": "0001_topic_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771789200000,
+      "tag": "0002_huge_dracula",
+      "breakpoints": true
     }
   ]
 }
