@@ -41,17 +41,34 @@ export const registerWebhookRoute = (app: FastifyInstance) => {
       return reply.code(200).send({ ok: true, duplicate: true });
     }
 
-    await enqueueUpdate({
-      updateId: body.update_id,
-      correlationId: `update-${body.update_id}`,
-    });
-    await markProcessedUpdateStatus({
-      updateId: body.update_id,
-      status: "enqueued",
-    });
+    // Acknowledge Telegram immediately; queue persistence continues asynchronously.
+    reply.code(200).send({ ok: true });
 
-    logger.info("Webhook update enqueued.", { updateId: body.update_id });
-    return reply.code(200).send({ ok: true });
+    void (async () => {
+      try {
+        await enqueueUpdate({
+          updateId: body.update_id,
+          correlationId: `update-${body.update_id}`,
+        });
+        await markProcessedUpdateStatus({
+          updateId: body.update_id,
+          status: "enqueued",
+        });
+
+        logger.info("Webhook update enqueued.", { updateId: body.update_id });
+      } catch (error) {
+        logger.error("Webhook enqueue failed after acknowledgment.", {
+          updateId: body.update_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await markProcessedUpdateStatus({
+          updateId: body.update_id,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+      }
+    })();
+    return;
   };
 
   app.post("/telegram/webhook", handleWebhook);

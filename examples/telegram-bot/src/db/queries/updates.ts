@@ -8,6 +8,23 @@ export const tryInsertProcessedUpdate = async (input: {
   rawUpdateJson: unknown;
 }) => {
   const updateId = String(input.updateId);
+  const [created] = await db
+    .insert(processedUpdates)
+    .values({
+      telegramUpdateId: updateId,
+      rawUpdateJson: input.rawUpdateJson,
+      status: "received",
+      receivedAt: new Date(),
+    })
+    .onConflictDoNothing({
+      target: processedUpdates.telegramUpdateId,
+    })
+    .returning();
+
+  if (created) {
+    return { inserted: true, record: created };
+  }
+
   const [existing] = await db
     .select()
     .from(processedUpdates)
@@ -18,17 +35,7 @@ export const tryInsertProcessedUpdate = async (input: {
     return { inserted: false, record: existing };
   }
 
-  const [created] = await db
-    .insert(processedUpdates)
-    .values({
-      telegramUpdateId: updateId,
-      rawUpdateJson: input.rawUpdateJson,
-      status: "received",
-      receivedAt: new Date(),
-    })
-    .returning();
-
-  return { inserted: true, record: created };
+  return { inserted: false, record: null };
 };
 
 export const markProcessedUpdateStatus = async (input: {
