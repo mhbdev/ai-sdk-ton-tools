@@ -15,9 +15,8 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "types": ["node", "vitest"],
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "drizzle.config.ts"],
