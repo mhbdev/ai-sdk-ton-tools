@@ -54,6 +54,7 @@ import {
   formatRateLimitMessage,
   shouldSendRateLimitNotice,
 } from "@/security/rate-limit";
+import { logger } from "@/observability/logger";
 
 type SettingsScreen = "menu" | "style" | "risk" | "network" | "wallet";
 
@@ -252,11 +253,11 @@ const buildSettingsView = (input: {
 
   if (input.screen === "menu") {
     const keyboard = new InlineKeyboard()
-      .text("Response Style", "cfg:style:open:menu")
-      .text("Risk Profile", "cfg:risk:open:menu")
+      .text("Response Style", "cfg:style:open:style")
+      .text("Risk Profile", "cfg:risk:open:risk")
       .row()
-      .text("Network", "cfg:network:open:menu")
-      .text("Wallet", "cfg:wallet:open:menu");
+      .text("Network", "cfg:network:open:network")
+      .text("Wallet", "cfg:wallet:open:wallet");
 
     return {
       text: [...header, "", "Choose a section to update your preferences."].join("\n"),
@@ -888,10 +889,21 @@ const handleSettingsCallback = async (input: {
               ? { replyToMessageId: input.callbackMessageId }
               : {}),
           });
-        } catch {
+        } catch (error) {
+          logger.warn("Wallet connect flow start failed from settings callback.", {
+            telegramUserId: input.telegramUserId,
+            telegramChatId: input.telegramChatId,
+            sessionId: session.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          const status = await getWalletConnectFlowStatus({
+            sessionId: session.id,
+            telegramUserId: input.telegramUserId,
+            telegramChatId: input.telegramChatId,
+          });
           await sendTelegramText(
             input.telegramChatId,
-            "Unable to start wallet connection right now. Please try again in a moment.",
+            status.message,
             {
               ...(typeof input.messageThreadId === "number"
                 ? { messageThreadId: input.messageThreadId }
@@ -1275,10 +1287,21 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
             ? { replyToMessageId: sourceMessageId }
             : {}),
         });
-      } catch {
+      } catch (error) {
+        logger.warn("Wallet connect flow start failed from command.", {
+          telegramUserId,
+          telegramChatId,
+          sessionId: session.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        const status = await getWalletConnectFlowStatus({
+          sessionId: session.id,
+          telegramUserId,
+          telegramChatId,
+        });
         await sendTelegramText(
           telegramChatId,
-          "Unable to start wallet connection right now. Please try again in a moment.",
+          status.message,
           {
             ...(typeof effectiveMessageThreadId === "number"
               ? { messageThreadId: effectiveMessageThreadId }

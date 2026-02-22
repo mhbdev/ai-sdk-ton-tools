@@ -431,6 +431,7 @@ export const executeAgentTurn = async (
   const toolResults = collectToolResultParts(responseMessages);
   const resolvedResponse = resolveTurnResponseText({
     rawText: providerExecution.responseText,
+    ...(request.text ? { userRequestText: request.text } : {}),
     approvalsCount: approvals.length,
     approvalWasGranted: request.approvalResponse?.approved === true,
     toolResults,

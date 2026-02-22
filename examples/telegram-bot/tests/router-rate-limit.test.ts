@@ -210,6 +210,29 @@ describe("router rate-limit integration", () => {
     expect(mocks.botSendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("renders settings menu with section-specific callback data", async () => {
+    const result = await routeUpdate(createMessageUpdate("/settings"));
+
+    expect(result.shouldQueueTurn).toBe(false);
+    expect(mocks.botSendMessage).toHaveBeenCalledTimes(1);
+
+    const call = mocks.botSendMessage.mock.calls[0];
+    const options = (call?.[2] ?? {}) as {
+      reply_markup?: {
+        inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+      };
+    };
+    const callbackData = (options.reply_markup?.inline_keyboard ?? [])
+      .flatMap((row) => row)
+      .map((button) => button.callback_data)
+      .filter((value): value is string => typeof value === "string");
+
+    expect(callbackData).toContain("cfg:style:open:style");
+    expect(callbackData).toContain("cfg:risk:open:risk");
+    expect(callbackData).toContain("cfg:network:open:network");
+    expect(callbackData).toContain("cfg:wallet:open:wallet");
+  });
+
   it("blocks normal prompt when daily quota is exhausted", async () => {
     mocks.checkUserTurnQuota.mockResolvedValue({
       allowed: false,

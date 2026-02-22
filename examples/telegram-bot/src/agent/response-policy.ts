@@ -13,6 +13,16 @@ const PLAIN_TEXT_APPROVAL_PATTERNS = [
   /\bpending your approval\b/i,
 ];
 
+const TRIVIAL_COMPLETION_PATTERNS = [
+  /^done[.!]*$/i,
+  /^completed[.!]*$/i,
+  /^complete[.!]*$/i,
+  /^all set[.!]*$/i,
+  /^finished[.!]*$/i,
+  /^task done[.!]*$/i,
+  /^action done[.!]*$/i,
+];
+
 type ToolResultPart = {
   toolName: string;
   toolCallId: string;
@@ -112,15 +122,47 @@ export const collectToolResultParts = (messages: ModelMessage[]): ToolResultPart
 
 export const resolveTurnResponseText = (input: {
   rawText: string | undefined;
+  userRequestText?: string;
   approvalsCount: number;
   approvalWasGranted: boolean;
   toolResults: ToolResultPart[];
 }): ResolvedTurnResponse => {
   const text = input.rawText?.trim() ?? "";
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  const hasTrivialCompletion =
+    normalizedText.length > 0 &&
+    normalizedText.length <= 48 &&
+    TRIVIAL_COMPLETION_PATTERNS.some((pattern) => pattern.test(normalizedText));
   const hasPendingApprovals = input.approvalsCount > 0;
+  const normalizedRequestText = input.userRequestText?.replace(/\s+/g, " ").trim() ?? "";
+  const requestTopic =
+    normalizedRequestText.length > 0
+      ? (normalizedRequestText.length > 96
+          ? `${normalizedRequestText.slice(0, 93)}...`
+          : normalizedRequestText)
+      : null;
+
   const shouldForceApprovedStatus =
     input.approvalWasGranted &&
-    (text.length === 0 || hasPlainTextApprovalRequest(text));
+    (text.length === 0 || hasPlainTextApprovalRequest(text) || hasTrivialCompletion);
+
+  const buildContextAwareCompletionText = () => {
+    if (input.toolResults.length > 0) {
+      const lines = [
+        requestTopic
+          ? `Completed your request about "${requestTopic}" with these results:`
+          : "Completed your request with these results:",
+        ...input.toolResults.map((part) => `- ${summarizeToolResult(part)}`),
+      ];
+      return lines.join("\n");
+    }
+
+    if (requestTopic) {
+      return `Completed your request about "${requestTopic}". I can provide a deeper breakdown or verification steps if you want.`;
+    }
+
+    return "Completed the request. Ask for details, exact values, or next steps if you want a deeper response.";
+  };
 
   if (shouldForceApprovedStatus) {
     const statusText = buildApprovedExecutionStatusText(input.toolResults);
@@ -132,15 +174,25 @@ export const resolveTurnResponseText = (input: {
     };
   }
 
-  if (text.length > 0) {
+  if (text.length > 0 && !hasTrivialCompletion) {
     return {
       text: hasPendingApprovals ? `${text}${APPROVAL_PENDING_SUFFIX}` : text,
       forcedApprovedStatus: false,
     };
   }
 
+  if (hasPendingApprovals) {
+    const lead = requestTopic
+      ? `Prepared the next step for "${requestTopic}".`
+      : "Prepared the next step.";
+    return {
+      text: `${lead}${APPROVAL_PENDING_SUFFIX}`,
+      forcedApprovedStatus: false,
+    };
+  }
+
   return {
-    text: hasPendingApprovals ? "Action paused pending your approval." : "Done.",
+    text: buildContextAwareCompletionText(),
     forcedApprovedStatus: false,
   };
 };

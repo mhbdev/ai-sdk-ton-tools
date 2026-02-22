@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { setMaxListeners } from "node:events";
 import TonConnect, {
   CHAIN,
   toUserFriendlyAddress,
@@ -44,9 +45,11 @@ type PendingWalletConnectSession = {
   nonce: string;
   expiresAtMs: number;
   connector: TonConnect;
+  connectAbortController: AbortController;
   unsubscribe: () => void;
   expiryTimer: NodeJS.Timeout;
   finalized: boolean;
+  closing: boolean;
   finalizePromise: Promise<void> | null;
 };
 
@@ -57,6 +60,10 @@ type WalletConnectFlowStatus = {
 
 const WALLET_CONNECT_TTL_MS = 10 * 60 * 1000;
 const WALLET_CONNECT_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
+const WALLET_CONNECT_OPENING_DEADLINE_MS = 2 * 60 * 1000;
+const TONCONNECT_MANIFEST_CHECK_TIMEOUT_MS = 10_000;
+const TONCONNECT_MANIFEST_CHECK_OK_CACHE_MS = 5 * 60 * 1000;
+const TONCONNECT_MANIFEST_CHECK_FAIL_CACHE_MS = 30_000;
 const DEFAULT_BRIDGE_URL = "https://bridge.tonapi.io/bridge";
 const FALLBACK_BRIDGE_URL = "https://bridge.tonhubapi.com/bridge";
 const DEFAULT_TONCONNECT_SOURCES: Array<{ bridgeUrl: string }> = [
@@ -66,9 +73,117 @@ const DEFAULT_TONCONNECT_SOURCES: Array<{ bridgeUrl: string }> = [
 
 const pendingWalletConnectSessions = new Map<string, PendingWalletConnectSession>();
 const tonConnectStorageFallback = new Map<string, string>();
+const tonConnectManifestHealthCache = new Map<
+  string,
+  { ok: boolean; checkedAt: number; error?: string }
+>();
 
 const asErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+const assertTonConnectManifestReachable = async (manifestUrl: string) => {
+  const now = Date.now();
+  const cached = tonConnectManifestHealthCache.get(manifestUrl);
+  if (cached) {
+    const cacheTtl = cached.ok
+      ? TONCONNECT_MANIFEST_CHECK_OK_CACHE_MS
+      : TONCONNECT_MANIFEST_CHECK_FAIL_CACHE_MS;
+    if (now - cached.checkedAt < cacheTtl) {
+      if (cached.ok) {
+        return;
+      }
+      throw new Error(
+        cached.error ??
+          "TonConnect manifest URL check failed recently. Please retry in a moment.",
+      );
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, TONCONNECT_MANIFEST_CHECK_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(manifestUrl, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json,text/plain,*/*",
+      },
+    });
+
+    if (!response.ok) {
+      const message = `TonConnect manifest URL returned HTTP ${response.status}.`;
+      tonConnectManifestHealthCache.set(manifestUrl, {
+        ok: false,
+        checkedAt: Date.now(),
+        error: message,
+      });
+      throw new Error(message);
+    }
+
+    tonConnectManifestHealthCache.set(manifestUrl, {
+      ok: true,
+      checkedAt: Date.now(),
+    });
+  } catch (error) {
+    if (!tonConnectManifestHealthCache.has(manifestUrl)) {
+      tonConnectManifestHealthCache.set(manifestUrl, {
+        ok: false,
+        checkedAt: Date.now(),
+        error: asErrorMessage(error),
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const buildWalletConnectFailureMessage = (
+  error: unknown,
+  phase: "initialization" | "status",
+) => {
+  const message = asErrorMessage(error).toLowerCase();
+
+  if (message.includes("manifest")) {
+    return "TonConnect manifest URL is not reachable. Please ask support to fix TONCONNECT_MANIFEST_URL and retry.";
+  }
+  if (message.includes("already connected")) {
+    return "A stale wallet connection session was detected. Run /wallet cancel, then /wallet connect again.";
+  }
+  if (message.includes("reject")) {
+    return "Wallet connection request was rejected in your wallet app. Run /wallet connect to try again.";
+  }
+  if (
+    message.includes("bridge") ||
+    message.includes("network") ||
+    message.includes("fetch") ||
+    message.includes("timeout") ||
+    message.includes("abort")
+  ) {
+    return "Unable to establish secure wallet bridge connection right now. Please try again in a moment.";
+  }
+
+  return phase === "initialization"
+    ? "Failed to initialize wallet connection. Please try again in a moment."
+    : "Wallet connection failed. Run /wallet connect to start a new attempt.";
+};
+
+const isTerminalWalletConnectStatusError = (error: unknown) => {
+  const message = asErrorMessage(error).toLowerCase();
+  return (
+    message.includes("manifest") ||
+    message.includes("already connected") ||
+    message.includes("reject") ||
+    message.includes("bridge") ||
+    message.includes("network") ||
+    message.includes("fetch") ||
+    message.includes("timeout") ||
+    message.includes("abort")
+  );
+};
 
 class RedisTonConnectStorage implements IStorage {
   constructor(private readonly prefix: string) {}
@@ -194,6 +309,7 @@ const cleanupPendingWalletConnectSession = async (
   pendingWalletConnectSessions.delete(sessionId);
   clearTimeout(pending.expiryTimer);
   pending.unsubscribe();
+  pending.connectAbortController.abort();
 
   try {
     pending.connector.pauseConnection();
@@ -211,10 +327,17 @@ const failAndCloseWalletConnectSession = async (
   message: string,
   error?: unknown,
 ) => {
+  if (pending.closing) {
+    return;
+  }
+  pending.closing = true;
+
   await patchSessionState(pending.sessionId, {
     tonConnectStatus: "failed",
     tonConnectLastError:
-      error instanceof Error ? error.message : (typeof error === "string" ? error : message),
+      error
+        ? buildWalletConnectFailureMessage(error, "status")
+        : (typeof message === "string" && message.length > 0 ? message : null),
     tonConnectNonce: null,
     tonConnectNonceIssuedAt: null,
     tonConnectNonceExpiresAt: null,
@@ -230,7 +353,7 @@ const failAndCloseWalletConnectSession = async (
 };
 
 const finalizeWalletConnectSession = async (pending: PendingWalletConnectSession) => {
-  if (pending.finalized) {
+  if (pending.finalized || pending.closing) {
     return;
   }
 
@@ -297,7 +420,7 @@ const finalizeWalletConnectSession = async (pending: PendingWalletConnectSession
 
 const refreshPendingWalletConnectSession = async (sessionId: string) => {
   const pending = pendingWalletConnectSessions.get(sessionId);
-  if (!pending) {
+  if (!pending || pending.closing) {
     return;
   }
 
@@ -322,12 +445,21 @@ export const beginWalletConnectFlow = async (input: {
   network: TonNetwork;
   correlationId: string;
 }) => {
+  await cleanupPendingWalletConnectSession(input.sessionId, {
+    disconnect: true,
+  });
+
   const env = getEnv();
+  await assertTonConnectManifestReachable(env.TONCONNECT_MANIFEST_URL);
   const nonce = createTonConnectNonce();
   const expiresAtMs = Date.now() + WALLET_CONNECT_TTL_MS;
+  const connectAbortController = new AbortController();
+  setMaxListeners(0, connectAbortController.signal);
   const connector = new TonConnect({
     manifestUrl: env.TONCONNECT_MANIFEST_URL,
-    storage: new RedisTonConnectStorage(`telegram-bot:tonconnect:${input.sessionId}`),
+    storage: new RedisTonConnectStorage(
+      `telegram-bot:tonconnect:${input.sessionId}:${nonce}`,
+    ),
     analytics: {
       mode: "off",
     },
@@ -336,8 +468,6 @@ export const beginWalletConnectFlow = async (input: {
   connector.setConnectionNetwork(
     input.network === "testnet" ? CHAIN.TESTNET : CHAIN.MAINNET,
   );
-
-  await cleanupPendingWalletConnectSession(input.sessionId);
 
   const expiryTimer = setTimeout(() => {
     void expireWalletConnectFlow({
@@ -357,9 +487,11 @@ export const beginWalletConnectFlow = async (input: {
     nonce,
     expiresAtMs,
     connector,
+    connectAbortController,
     unsubscribe: () => undefined,
     expiryTimer,
     finalized: false,
+    closing: false,
     finalizePromise: null,
   };
 
@@ -373,6 +505,24 @@ export const beginWalletConnectFlow = async (input: {
         sessionId: input.sessionId,
         error: error.message,
       });
+
+      const active = pendingWalletConnectSessions.get(input.sessionId);
+      if (!active || active !== pending || pending.closing) {
+        return;
+      }
+
+      if (isTerminalWalletConnectStatusError(error)) {
+        void failAndCloseWalletConnectSession(
+          pending,
+          buildWalletConnectFailureMessage(error, "status"),
+          error,
+        );
+        return;
+      }
+
+      void patchSessionState(input.sessionId, {
+        tonConnectLastError: buildWalletConnectFailureMessage(error, "status"),
+      }).catch(() => undefined);
     },
   );
 
@@ -384,6 +534,8 @@ export const beginWalletConnectFlow = async (input: {
       request: {
         tonProof: nonce,
       },
+      openingDeadlineMS: WALLET_CONNECT_OPENING_DEADLINE_MS,
+      signal: connectAbortController.signal,
     });
     if (typeof generatedLink !== "string" || generatedLink.length === 0) {
       throw new Error("TonConnect did not return a universal connection link.");
@@ -399,23 +551,24 @@ export const beginWalletConnectFlow = async (input: {
       tonConnectLastError: null,
     });
   } catch (error) {
+    const message = buildWalletConnectFailureMessage(error, "initialization");
     logger.error("Failed to initialize wallet connect flow.", {
       correlationId: input.correlationId,
       sessionId: input.sessionId,
       error: error instanceof Error ? error.message : String(error),
+      userMessage: message,
     });
     await cleanupPendingWalletConnectSession(input.sessionId, {
       disconnect: true,
     });
     await patchSessionState(input.sessionId, {
       tonConnectStatus: "failed",
-      tonConnectLastError:
-        error instanceof Error ? error.message : "Failed to initialize wallet connect flow.",
+      tonConnectLastError: message,
       tonConnectNonce: null,
       tonConnectNonceIssuedAt: null,
       tonConnectNonceExpiresAt: null,
     });
-    throw error;
+    throw new Error(message);
   }
 
   return {

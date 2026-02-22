@@ -35,6 +35,8 @@ const TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS = 8;
 const TELEGRAM_BOOTSTRAP_RETRY_BASE_DELAY_MS = 750;
 const RECEIVED_UPDATE_RECOVERY_INTERVAL_MS = 5_000;
 const RECEIVED_UPDATE_RECOVERY_BATCH_SIZE = 200;
+const TONCONNECT_ICON_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAAR0lEQVR42u3PQQ0AIAzAMMC/5yFjRxMFPXp2zQAAAPBf1S0W2gV2mQkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4F8M6vQBAzQ2m0QAAAAASUVORK5CYII=";
 
 const isTransientTelegramNetworkError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -93,11 +95,32 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const normalizedAppBaseUrl = env.APP_BASE_URL.endsWith("/")
     ? env.APP_BASE_URL
     : `${env.APP_BASE_URL}/`;
+  const tonConnectManifestUrl = new URL(
+    "tonconnect-manifest.json",
+    normalizedAppBaseUrl,
+  ).toString();
+  const tonConnectIconUrl = new URL("tonconnect-icon.png", normalizedAppBaseUrl).toString();
   const app = Fastify({
     logger: false,
   });
 
   registerWebhookRoute(app);
+
+  app.get("/tonconnect-icon.png", async (_request, reply) => {
+    const iconPng = Buffer.from(TONCONNECT_ICON_PNG_BASE64, "base64");
+    return reply
+      .header("content-type", "image/png")
+      .header("cache-control", "public, max-age=86400")
+      .send(iconPng);
+  });
+
+  app.get("/tonconnect-manifest.json", async () => ({
+    name: "Telegram TON Agent Bot",
+    url: normalizedAppBaseUrl.endsWith("/")
+      ? normalizedAppBaseUrl.slice(0, -1)
+      : normalizedAppBaseUrl,
+    iconUrl: tonConnectIconUrl,
+  }));
 
   app.get("/healthz", async () => ({
     ok: true,
@@ -259,6 +282,13 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
 
   const startTelegramRuntime = async () => {
     const bot = getBot();
+    if (env.TONCONNECT_MANIFEST_URL !== tonConnectManifestUrl) {
+      logger.warn("TONCONNECT_MANIFEST_URL is not using built-in manifest route.", {
+        configuredManifestUrl: env.TONCONNECT_MANIFEST_URL,
+        recommendedManifestUrl: tonConnectManifestUrl,
+      });
+    }
+
     if (env.BOT_RUN_MODE === "webhook") {
       const webhookUrl = new URL("telegram/webhook", normalizedAppBaseUrl).toString();
       try {
