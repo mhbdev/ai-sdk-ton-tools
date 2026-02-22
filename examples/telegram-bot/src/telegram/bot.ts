@@ -1,6 +1,11 @@
 import { Bot } from "grammy";
 import { getEnv } from "@/config/env";
 import { logger } from "@/observability/logger";
+import {
+  hasLikelyMarkdownFormatting,
+  isTelegramParseModeError,
+  renderTelegramHtmlFromMarkdown,
+} from "@/telegram/format";
 import type { ChatType } from "@/types/contracts";
 import { chunkTelegramMessage } from "@/utils/chunk";
 
@@ -58,21 +63,105 @@ const getBotTopicsModeEnabled = async () => {
 
 export const botSupportsTopicsMode = () => getBotTopicsModeEnabled();
 
+export const isTelegramMessageThreadNotFoundError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /message thread not found/i.test(message);
+};
+
+type SendMessageOptions = {
+  message_thread_id?: number;
+  reply_parameters?: {
+    message_id: number;
+    allow_sending_without_reply?: boolean;
+  };
+  parse_mode?: "HTML";
+};
+
+const sendMessageWithThreadFallback = async (
+  bot: Bot,
+  chatId: number,
+  text: string,
+  options: SendMessageOptions,
+) => {
+  try {
+    await bot.api.sendMessage(chatId, text, options);
+  } catch (error) {
+    if (!isTelegramMessageThreadNotFoundError(error) || options.message_thread_id === undefined) {
+      throw error;
+    }
+
+    logger.warn("Telegram thread not found; retrying send in main chat context.", {
+      chatId: String(chatId),
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    const fallbackOptions: SendMessageOptions = {
+      ...(typeof options.parse_mode === "string" ? { parse_mode: options.parse_mode } : {}),
+    };
+    await bot.api.sendMessage(chatId, text, fallbackOptions);
+  }
+};
+
 export const sendTelegramText = async (
   chatId: string,
   text: string,
   options?: {
     messageThreadId?: number;
+    replyToMessageId?: number;
   },
 ) => {
   const bot = getBot();
   const numericChatId = Number(chatId);
-  for (const chunk of chunkTelegramMessage(text)) {
-    await bot.api.sendMessage(numericChatId, chunk, {
+  const shouldTryRichFormatting = hasLikelyMarkdownFormatting(text);
+  const maxChunkSize = shouldTryRichFormatting ? 3500 : 4096;
+
+  for (const chunk of chunkTelegramMessage(text, maxChunkSize)) {
+    const baseOptions = {
       ...(typeof options?.messageThreadId === "number"
         ? { message_thread_id: options.messageThreadId }
         : {}),
-    });
+      ...(typeof options?.replyToMessageId === "number"
+        ? {
+            reply_parameters: {
+              message_id: options.replyToMessageId,
+              allow_sending_without_reply: true,
+            },
+          }
+        : {}),
+    };
+
+    if (!shouldTryRichFormatting) {
+      await sendMessageWithThreadFallback(
+        bot,
+        numericChatId,
+        chunk,
+        baseOptions,
+      );
+      continue;
+    }
+
+    const htmlChunk = renderTelegramHtmlFromMarkdown(chunk);
+    try {
+      await sendMessageWithThreadFallback(bot, numericChatId, htmlChunk, {
+        ...baseOptions,
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      if (!isTelegramParseModeError(error)) {
+        throw error;
+      }
+
+      logger.warn("Telegram parse mode failed; falling back to plain text.", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sendMessageWithThreadFallback(
+        bot,
+        numericChatId,
+        chunk,
+        baseOptions,
+      );
+    }
   }
 };
 
@@ -123,7 +212,7 @@ export const createTelegramTokenDraftStream = async (
   const draftId = hashToDraftId(options?.draftSeed ?? `${Date.now()}-${chatId}`);
   let bufferedText = "";
   let lastSentText = "";
-  let lastSentAt = 0;
+  let lastDispatchAt = 0;
   let failed = false;
   let flushTimer: NodeJS.Timeout | null = null;
   let sendChain: Promise<void> = Promise.resolve();
@@ -140,6 +229,7 @@ export const createTelegramTokenDraftStream = async (
     if (snapshot === lastSentText) {
       return;
     }
+    lastDispatchAt = Date.now();
 
     sendChain = sendChain
       .then(async () => {
@@ -149,7 +239,6 @@ export const createTelegramTokenDraftStream = async (
             : {}),
         });
         lastSentText = snapshot;
-        lastSentAt = Date.now();
       })
       .catch((error) => {
         failed = true;
@@ -173,7 +262,7 @@ export const createTelegramTokenDraftStream = async (
       return;
     }
 
-    const elapsed = Date.now() - lastSentAt;
+    const elapsed = Date.now() - lastDispatchAt;
     const delay = Math.max(0, DRAFT_STREAM_UPDATE_INTERVAL_MS - elapsed);
     flushTimer = setTimeout(() => {
       flushTimer = null;
@@ -188,7 +277,7 @@ export const createTelegramTokenDraftStream = async (
       }
 
       bufferedText += delta;
-      if (Date.now() - lastSentAt >= DRAFT_STREAM_UPDATE_INTERVAL_MS) {
+      if (Date.now() - lastDispatchAt >= DRAFT_STREAM_UPDATE_INTERVAL_MS) {
         queueSend();
         return;
       }

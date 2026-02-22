@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import Fastify from "fastify";
 import { GrammyError } from "grammy";
 import type { TelemetryHandle } from "@/observability/telemetry";
@@ -18,9 +19,54 @@ import {
 import { startPollingIngestion } from "@/telegram/polling";
 import { registerWebhookRoute } from "@/telegram/webhook";
 import { verifyAdminBearerToken } from "@/security/webhook-auth";
+import { shutdownWalletConnectFlows } from "@/wallet/tonconnect";
 
 type StartRuntimeArgs = {
   telemetry: TelemetryHandle;
+};
+
+const TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS = 8;
+const TELEGRAM_BOOTSTRAP_RETRY_BASE_DELAY_MS = 750;
+
+const isTransientTelegramNetworkError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /network request/i.test(message) ||
+    /fetch failed/i.test(message) ||
+    /timeout/i.test(message) ||
+    /econn/i.test(message) ||
+    /und_err/i.test(message)
+  );
+};
+
+const retryTelegramBootstrap = async <T>(input: {
+  label: string;
+  run: () => Promise<T>;
+}) => {
+  let attempt = 1;
+  while (attempt <= TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS) {
+    try {
+      return await input.run();
+    } catch (error) {
+      if (
+        !isTransientTelegramNetworkError(error) ||
+        attempt >= TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+
+      const delayMs = TELEGRAM_BOOTSTRAP_RETRY_BASE_DELAY_MS * attempt;
+      logger.warn("Telegram bootstrap request failed, retrying.", {
+        label: input.label,
+        attempt,
+        maxAttempts: TELEGRAM_BOOTSTRAP_MAX_ATTEMPTS,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(delayMs);
+      attempt += 1;
+    }
+  }
 };
 
 const throwTelegramAuthHint = (error: unknown): never => {
@@ -121,9 +167,13 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
     if (env.BOT_RUN_MODE === "webhook") {
       const webhookUrl = `${env.APP_BASE_URL}/telegram/webhook/${env.TELEGRAM_WEBHOOK_SECRET}`;
       try {
-        await bot.api.setWebhook(webhookUrl, {
-          secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-          allowed_updates: ["message", "callback_query"],
+        await retryTelegramBootstrap({
+          label: "setWebhook",
+          run: () =>
+            bot.api.setWebhook(webhookUrl, {
+              secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+              allowed_updates: ["message", "callback_query"],
+            }),
         });
       } catch (error) {
         throwTelegramAuthHint(error);
@@ -133,11 +183,20 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
     }
 
     try {
-      await bot.api.deleteWebhook({
-        drop_pending_updates: false,
+      await retryTelegramBootstrap({
+        label: "deleteWebhook",
+        run: () =>
+          bot.api.deleteWebhook({
+            drop_pending_updates: false,
+          }),
       });
     } catch (error) {
-      throwTelegramAuthHint(error);
+      if (!isTransientTelegramNetworkError(error)) {
+        throwTelegramAuthHint(error);
+      }
+      logger.warn("deleteWebhook failed after retries; starting polling anyway.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     await startPollingIngestion();
   };
@@ -151,6 +210,12 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
         } catch {
           // Ignore stop errors to keep shutdown best-effort.
         }
+
+        await shutdownWalletConnectFlows().catch((error) => {
+          logger.warn("Failed to shutdown pending TonConnect flows cleanly.", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
 
         await Promise.allSettled([
           app.close(),

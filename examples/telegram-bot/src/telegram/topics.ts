@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
 import { getEnv } from "@/config/env";
@@ -17,13 +17,23 @@ const TOPIC_EMOJI_CHOICES = [
   "🤖",
   "📈",
   "💸",
-  "🔒",
   "🧪",
-  "🧩",
-  "⚙️",
-  "📊",
-  "🛡️",
+  "💡",
+  "📚",
+  "🔎",
+  "✅",
+  "💰",
 ] as const;
+
+const GENERIC_TOPIC_TITLE_PATTERNS = [
+  /^new chat$/i,
+  /^new topic$/i,
+  /^chat$/i,
+  /^topic$/i,
+  /^discussion$/i,
+  /^ton discussion$/i,
+  /^general$/i,
+];
 
 const topicNameSchema = z.object({
   title: z.string().min(3).max(MAX_TOPIC_TITLE_LENGTH),
@@ -39,6 +49,7 @@ type TopicSuggestion = {
 type TopicCreationResult = {
   messageThreadId?: number;
   created: boolean;
+  updated?: boolean;
   title?: string;
   emoji?: string;
   source?: "llm" | "heuristic";
@@ -53,11 +64,68 @@ let cachedForumIcons:
   | null = null;
 const topicCreateBackoffByChat = new Map<string, number>();
 
+const canonicalizeEmoji = (emoji: string) =>
+  emoji
+    .normalize("NFKC")
+    .replace(/\uFE0F/g, "")
+    .trim();
+
+const isGenericTopicTitle = (title: string) => {
+  const normalized = normalizeWhitespace(title).toLowerCase();
+  return GENERIC_TOPIC_TITLE_PATTERNS.some((pattern) => pattern.test(normalized));
+};
+
 const normalizeWhitespace = (value: string) =>
   value
     .replace(/\s+/g, " ")
     .replace(/[\r\n\t]/g, " ")
     .trim();
+
+const GREETING_WORDS = new Set([
+  "hi",
+  "hello",
+  "hey",
+  "yo",
+  "sup",
+  "buddy",
+  "friend",
+  "there",
+  "gm",
+  "gn",
+  "morning",
+  "afternoon",
+  "evening",
+]);
+
+const isCasualGreetingPrompt = (prompt: string) => {
+  const normalized = normalizeWhitespace(prompt)
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length === 0 || words.length > 5) {
+    return false;
+  }
+
+  let greetingWordCount = 0;
+  for (const word of words) {
+    if (GREETING_WORDS.has(word)) {
+      greetingWordCount += 1;
+      continue;
+    }
+    return false;
+  }
+  return greetingWordCount > 0;
+};
+
+const emojiToCodePoints = (emoji: string) =>
+  Array.from(emoji)
+    .map((char) => `U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}`)
+    .join(" ");
 
 const sanitizeTitle = (value: string) => {
   const normalized = normalizeWhitespace(value);
@@ -73,6 +141,10 @@ const sanitizeTitle = (value: string) => {
 };
 
 const fallbackTitleFromPrompt = (prompt: string) => {
+  if (isCasualGreetingPrompt(prompt)) {
+    return "General Chat";
+  }
+
   const normalized = normalizeWhitespace(prompt)
     .replace(/^[^\p{L}\p{N}]+/u, "")
     .replace(/[^\p{L}\p{N}\s:;,.!?-]+/gu, "");
@@ -95,21 +167,30 @@ const fallbackEmojiFromPrompt = (prompt: string) => {
     return "💸";
   }
   if (/(security|safe|secure|seed|mnemonic|private key|proof)/.test(lowered)) {
-    return "🔒";
+    return "✅";
   }
   if (/(debug|error|test|qa|bug)/.test(lowered)) {
     return "🧪";
   }
-  if (/(nft|jetton|token)/.test(lowered)) {
-    return "🧩";
+  if (/(nft|jetton|token|asset)/.test(lowered)) {
+    return "💰";
+  }
+  if (/(learn|guide|how|explain|what is)/.test(lowered)) {
+    return "📚";
+  }
+  if (/(analy[sz]e|inspect|trace|search|find)/.test(lowered)) {
+    return "🔎";
   }
   return DEFAULT_EMOJI;
 };
 
 const toSupportedEmoji = (emojiCandidate: string, prompt: string) => {
-  const normalized = emojiCandidate.trim();
-  if (TOPIC_EMOJI_CHOICES.includes(normalized as (typeof TOPIC_EMOJI_CHOICES)[number])) {
-    return normalized;
+  const normalized = canonicalizeEmoji(emojiCandidate);
+  const matched = TOPIC_EMOJI_CHOICES.find(
+    (item) => canonicalizeEmoji(item) === normalized,
+  );
+  if (matched) {
+    return matched;
   }
   return fallbackEmojiFromPrompt(prompt);
 };
@@ -125,15 +206,21 @@ const getOpenRouter = () => {
 
 const suggestTopicWithLlm = async (prompt: string): Promise<TopicSuggestion> => {
   const env = getEnv();
-  const { object } = await generateObject({
+  const { output } = await generateText({
     model: getOpenRouter()(env.AI_TOPIC_MODEL),
-    schema: topicNameSchema,
+    output: Output.object({
+      schema: topicNameSchema,
+      name: "telegram_topic_name",
+      description:
+        "A concise Telegram topic title and emoji for the user's first message in a thread.",
+    }),
     temperature: 0.2,
     maxOutputTokens: 80,
     prompt: [
       "Create a concise Telegram forum topic title and one emoji for this user request.",
       "Rules:",
       "- title must be short, specific, plain text, <= 64 chars",
+      "- never use generic labels like New Chat, Chat, Topic, or Discussion",
       `- emoji must be one of: ${TOPIC_EMOJI_CHOICES.join(", ")}`,
       "- no markdown",
       "",
@@ -142,8 +229,47 @@ const suggestTopicWithLlm = async (prompt: string): Promise<TopicSuggestion> => 
   });
 
   return {
-    title: sanitizeTitle(object.title),
-    emoji: toSupportedEmoji(object.emoji, prompt),
+    title: sanitizeTitle(output.title),
+    emoji: toSupportedEmoji(output.emoji, prompt),
+    source: "llm",
+  };
+};
+
+const suggestTopicWithLlmTextFallback = async (
+  prompt: string,
+): Promise<TopicSuggestion> => {
+  const env = getEnv();
+  const { text } = await generateText({
+    model: getOpenRouter()(env.AI_TOPIC_MODEL),
+    temperature: 0.2,
+    maxOutputTokens: 120,
+    prompt: [
+      "Return ONLY valid JSON with keys title and emoji.",
+      "Rules:",
+      "- title must be short, specific, plain text, <= 64 chars",
+      "- never use generic labels like New Chat, Chat, Topic, or Discussion",
+      `- emoji must be one of: ${TOPIC_EMOJI_CHOICES.join(", ")}`,
+      "",
+      "JSON example:",
+      '{"title":"TON Wallet Help","emoji":"💸"}',
+      "",
+      `User request: ${prompt}`,
+    ].join("\n"),
+  });
+
+  const jsonMatch = /{[\s\S]*}/.exec(text);
+  if (!jsonMatch) {
+    throw new Error("Topic naming fallback model response did not contain JSON.");
+  }
+
+  const parsed = topicNameSchema.safeParse(JSON.parse(jsonMatch[0]));
+  if (!parsed.success) {
+    throw new Error("Topic naming fallback model response did not match schema.");
+  }
+
+  return {
+    title: sanitizeTitle(parsed.data.title),
+    emoji: toSupportedEmoji(parsed.data.emoji, prompt),
     source: "llm",
   };
 };
@@ -158,13 +284,42 @@ const suggestTopic = async (prompt: string): Promise<TopicSuggestion> => {
 
   try {
     const llm = await suggestTopicWithLlm(normalizedPrompt);
+    if (isGenericTopicTitle(llm.title)) {
+      logger.info("Topic naming model returned generic title; using heuristic fallback.", {
+        modelId: getEnv().AI_TOPIC_MODEL,
+        llmTitle: llm.title,
+      });
+      return heuristic;
+    }
     return llm;
-  } catch (error) {
-    logger.warn("Topic naming model failed; using heuristic fallback.", {
-      error: error instanceof Error ? error.message : String(error),
-      modelId: getEnv().AI_TOPIC_MODEL,
-    });
-    return heuristic;
+  } catch (structuredError) {
+    try {
+      const llmFallback = await suggestTopicWithLlmTextFallback(normalizedPrompt);
+      if (isGenericTopicTitle(llmFallback.title)) {
+        logger.info("Topic naming text fallback returned generic title; using heuristic fallback.", {
+          modelId: getEnv().AI_TOPIC_MODEL,
+          llmTitle: llmFallback.title,
+        });
+        return heuristic;
+      }
+      logger.info("Topic naming text fallback succeeded after structured output failure.", {
+        modelId: getEnv().AI_TOPIC_MODEL,
+      });
+      return llmFallback;
+    } catch (textFallbackError) {
+      logger.warn("Topic naming model failed; using heuristic fallback.", {
+        structuredError:
+          structuredError instanceof Error
+            ? structuredError.message
+            : String(structuredError),
+        textFallbackError:
+          textFallbackError instanceof Error
+            ? textFallbackError.message
+            : String(textFallbackError),
+        modelId: getEnv().AI_TOPIC_MODEL,
+      });
+      return heuristic;
+    }
   }
 };
 
@@ -179,7 +334,7 @@ const getForumTopicEmojiMap = async () => {
 
   for (const sticker of stickers) {
     if (sticker.emoji && sticker.custom_emoji_id) {
-      emojiToCustomId.set(sticker.emoji, sticker.custom_emoji_id);
+      emojiToCustomId.set(canonicalizeEmoji(sticker.emoji), sticker.custom_emoji_id);
     }
   }
 
@@ -191,11 +346,38 @@ const getForumTopicEmojiMap = async () => {
   return emojiToCustomId;
 };
 
+const resolveTopicIconSelection = (
+  emojiMap: Map<string, string>,
+  preferredEmoji: string,
+) => {
+  let selectedEmoji = preferredEmoji;
+  let iconCustomEmojiId = emojiMap.get(canonicalizeEmoji(selectedEmoji));
+
+  if (!iconCustomEmojiId) {
+    selectedEmoji = DEFAULT_EMOJI;
+    iconCustomEmojiId = emojiMap.get(canonicalizeEmoji(selectedEmoji));
+  }
+
+  if (!iconCustomEmojiId && emojiMap.size > 0) {
+    const firstSupported = emojiMap.keys().next().value as string | undefined;
+    if (firstSupported) {
+      selectedEmoji = firstSupported;
+      iconCustomEmojiId = emojiMap.get(firstSupported);
+    }
+  }
+
+  return {
+    selectedEmoji,
+    iconCustomEmojiId,
+  };
+};
+
 export const maybeCreateTopicForPrompt = async (input: {
   telegramChatId: string;
   chatType: ChatType;
   prompt: string;
   existingMessageThreadId?: number;
+  shouldRetitleExistingThread?: boolean;
   correlationId: string;
 }): Promise<TopicCreationResult> => {
   const env = getEnv();
@@ -217,21 +399,90 @@ export const maybeCreateTopicForPrompt = async (input: {
     };
   }
 
-  if (typeof input.existingMessageThreadId === "number") {
+  const retryAfter = topicCreateBackoffByChat.get(input.telegramChatId) ?? 0;
+  if (retryAfter > Date.now()) {
     return {
-      messageThreadId: input.existingMessageThreadId,
+      ...(typeof input.existingMessageThreadId === "number"
+        ? { messageThreadId: input.existingMessageThreadId }
+        : {}),
       created: false,
     };
+  }
+
+  if (typeof input.existingMessageThreadId === "number") {
+    if (
+      input.chatType !== "private" ||
+      input.shouldRetitleExistingThread !== true
+    ) {
+      return {
+        messageThreadId: input.existingMessageThreadId,
+        created: false,
+      };
+    }
+
+    if (!(await botSupportsTopicsMode())) {
+      return {
+        messageThreadId: input.existingMessageThreadId,
+        created: false,
+      };
+    }
+
+    const suggestion = await suggestTopic(input.prompt);
+    try {
+      const emojiMap = await getForumTopicEmojiMap();
+      const { selectedEmoji, iconCustomEmojiId } = resolveTopicIconSelection(
+        emojiMap,
+        suggestion.emoji,
+      );
+
+      const bot = getBot();
+      await bot.api.editForumTopic(
+        Number(input.telegramChatId),
+        input.existingMessageThreadId,
+        {
+          name: suggestion.title,
+          ...(iconCustomEmojiId ? { icon_custom_emoji_id: iconCustomEmojiId } : {}),
+        },
+      );
+
+      logger.info("Updated existing topic metadata from initial prompt.", {
+        correlationId: input.correlationId,
+        chatId: input.telegramChatId,
+        messageThreadId: input.existingMessageThreadId,
+        title: suggestion.title,
+        emoji: selectedEmoji,
+        emojiCodePoints: emojiToCodePoints(selectedEmoji),
+        source: suggestion.source,
+      });
+
+      return {
+        messageThreadId: input.existingMessageThreadId,
+        created: false,
+        updated: true,
+        title: suggestion.title,
+        emoji: selectedEmoji,
+        source: suggestion.source,
+      };
+    } catch (error) {
+      topicCreateBackoffByChat.set(
+        input.telegramChatId,
+        Date.now() + TOPIC_CREATE_RETRY_DELAY_MS,
+      );
+      logger.warn("Failed to update existing topic metadata.", {
+        correlationId: input.correlationId,
+        chatId: input.telegramChatId,
+        messageThreadId: input.existingMessageThreadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return {
+        messageThreadId: input.existingMessageThreadId,
+        created: false,
+      };
+    }
   }
 
   if (input.chatType === "private" && !(await botSupportsTopicsMode())) {
-    return {
-      created: false,
-    };
-  }
-
-  const retryAfter = topicCreateBackoffByChat.get(input.telegramChatId) ?? 0;
-  if (retryAfter > Date.now()) {
     return {
       created: false,
     };
@@ -241,7 +492,11 @@ export const maybeCreateTopicForPrompt = async (input: {
 
   try {
     const emojiMap = await getForumTopicEmojiMap();
-    const iconCustomEmojiId = emojiMap.get(suggestion.emoji);
+    const { selectedEmoji, iconCustomEmojiId } = resolveTopicIconSelection(
+      emojiMap,
+      suggestion.emoji,
+    );
+
     const bot = getBot();
     const createdTopic = await bot.api.createForumTopic(
       Number(input.telegramChatId),
@@ -253,7 +508,7 @@ export const maybeCreateTopicForPrompt = async (input: {
 
     await sendTelegramText(
       input.telegramChatId,
-      `Created topic "${suggestion.title}" ${suggestion.emoji}. Continuing there.`,
+      `Created topic "${suggestion.title}" ${selectedEmoji}. Continuing there.`,
       {
         messageThreadId: createdTopic.message_thread_id,
       },
@@ -264,7 +519,8 @@ export const maybeCreateTopicForPrompt = async (input: {
       chatId: input.telegramChatId,
       messageThreadId: createdTopic.message_thread_id,
       title: suggestion.title,
-      emoji: suggestion.emoji,
+      emoji: selectedEmoji,
+      emojiCodePoints: emojiToCodePoints(selectedEmoji),
       source: suggestion.source,
     });
 
@@ -272,7 +528,7 @@ export const maybeCreateTopicForPrompt = async (input: {
       messageThreadId: createdTopic.message_thread_id,
       created: true,
       title: suggestion.title,
-      emoji: suggestion.emoji,
+      emoji: selectedEmoji,
       source: suggestion.source,
     };
   } catch (error) {

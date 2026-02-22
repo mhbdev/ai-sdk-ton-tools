@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { logger } from "@/observability/logger";
 import { redis } from "@/queue/connection";
 
 const LOCK_TTL_MS = 15_000;
@@ -34,20 +35,46 @@ export const withChatLock = async <T>(
     );
   }
 
-  const heartbeat = setInterval(async () => {
-    const current = await redis.get(key);
-    if (current === lockToken) {
-      await redis.pexpire(key, LOCK_TTL_MS);
+  let heartbeatFailed = false;
+  const renewLock = async () => {
+    try {
+      const current = await redis.get(key);
+      if (current === lockToken) {
+        await redis.pexpire(key, LOCK_TTL_MS);
+      }
+      heartbeatFailed = false;
+    } catch (error) {
+      if (heartbeatFailed) {
+        return;
+      }
+      heartbeatFailed = true;
+      logger.warn("Chat lock heartbeat failed; continuing without renewal.", {
+        chatId,
+        messageThreadId: typeof messageThreadId === "number" ? messageThreadId : null,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
+  };
+
+  const heartbeat = setInterval(() => {
+    void renewLock();
   }, 5_000);
 
   try {
     return await work();
   } finally {
     clearInterval(heartbeat);
-    const current = await redis.get(key);
-    if (current === lockToken) {
-      await redis.del(key);
+    try {
+      const current = await redis.get(key);
+      if (current === lockToken) {
+        await redis.del(key);
+      }
+    } catch (error) {
+      logger.warn("Chat lock release failed; lock may expire by TTL.", {
+        chatId,
+        messageThreadId: typeof messageThreadId === "number" ? messageThreadId : null,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 };

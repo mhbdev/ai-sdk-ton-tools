@@ -39,10 +39,30 @@ type TurnExecutionCallbacks = {
 type AgentProviderExecutionResult = {
   provider: AgentModelProvider;
   modelId: string;
+  toolChoice: "auto" | "required";
   responseText: string;
   responseMessages: ModelMessage[];
   usedFallback: boolean;
   primaryErrorMessage?: string;
+};
+
+const FRIENDLY_TON_ADDRESS_PATTERN =
+  /\b(?:EQ|UQ|kQ|0Q|Ef|Uf|kf|0f)[A-Za-z0-9_-]{46,}\b/;
+const RAW_TON_ADDRESS_PATTERN = /\b-?\d:[0-9a-fA-F]{64}\b/;
+
+const requestContainsTonAddress = (text: string) =>
+  FRIENDLY_TON_ADDRESS_PATTERN.test(text) || RAW_TON_ADDRESS_PATTERN.test(text);
+
+const resolveAgentToolChoice = (request: TurnExecutionRequest) => {
+  if (request.approvalResponse) {
+    return "auto" as const;
+  }
+
+  if (requestContainsTonAddress(request.text)) {
+    return "required" as const;
+  }
+
+  return "auto" as const;
 };
 
 const buildSystemPrompt = (input: {
@@ -53,6 +73,9 @@ const buildSystemPrompt = (input: {
   [
     "You are a production TON assistant in Telegram.",
     "Use tools for factual blockchain answers.",
+    "Never claim an address is invalid unless a tool call (for example tonAddressParse) explicitly fails.",
+    "TON user-friendly addresses can start with EQ or UQ and may still be valid.",
+    "If the user asks for DNS data for an address, use tonFindAddressDnsItems (or tonGetAccountDomains) instead of domain-resolve tools.",
     "Be concise and explicit with risk for all value movement.",
     "Never request or store user private keys or seed phrases.",
     `Current network: ${input.network}`,
@@ -150,6 +173,7 @@ const executeWithProviderFallback = async (input: {
 }): Promise<AgentProviderExecutionResult> => {
   const attempts = buildAgentModelAttempts(input.request.modelId);
   const hasFallbackAttempt = attempts.length > 1;
+  const toolChoice = resolveAgentToolChoice(input.request);
   let primaryError: unknown;
 
   for (let index = 0; index < attempts.length; index += 1) {
@@ -170,6 +194,7 @@ const executeWithProviderFallback = async (input: {
           : {}),
       }),
       tools: input.tools,
+      toolChoice,
       stopWhen: stepCountIs(20),
       experimental_telemetry: {
         isEnabled: input.env.NODE_ENV === "production",
@@ -179,6 +204,7 @@ const executeWithProviderFallback = async (input: {
           correlationId: input.request.correlationId,
           provider: attempt.provider,
           modelId: attempt.modelId,
+          toolChoice,
         },
       },
     });
@@ -215,6 +241,7 @@ const executeWithProviderFallback = async (input: {
       return {
         provider: attempt.provider,
         modelId: attempt.modelId,
+        toolChoice,
         responseText: normalizedText,
         responseMessages,
         usedFallback: index > 0,
@@ -351,6 +378,7 @@ export const executeAgentTurn = async (
         primaryProvider: "openrouter",
         fallbackProvider: providerExecution.provider,
         fallbackModelId: providerExecution.modelId,
+        toolChoice: providerExecution.toolChoice,
         primaryError: providerExecution.primaryErrorMessage ?? "unknown",
       },
     });
@@ -368,6 +396,7 @@ export const executeAgentTurn = async (
       provider: providerExecution.provider,
       modelId: providerExecution.modelId,
       usedFallback: providerExecution.usedFallback,
+      toolChoice: providerExecution.toolChoice,
     },
   });
 
@@ -377,6 +406,7 @@ export const executeAgentTurn = async (
     provider: providerExecution.provider,
     modelId: providerExecution.modelId,
     usedFallback: providerExecution.usedFallback,
+    toolChoice: providerExecution.toolChoice,
   });
 
   const toolResults = collectToolResultParts(responseMessages);

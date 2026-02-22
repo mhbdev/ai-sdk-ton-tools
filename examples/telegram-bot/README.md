@@ -6,6 +6,7 @@ Production-grade Telegram bot service for TON tools with:
 - OpenRouter as primary model provider with AI Gateway fallback
 - Telegram native token-level streaming responses (`ToolLoopAgent.stream` + `sendMessageDraft`)
 - thread/topic auto-creation with LLM-generated title + emoji for new prompts
+- one-tap wallet connection via `/wallet connect` (button-based TonConnect flow with status updates)
 - strict approval workflow for critical actions
 - queue-based processing with idempotency
 - PostgreSQL persistence + Redis queues/locks
@@ -69,6 +70,8 @@ pnpm db:migrate:local
 ```bash
 pnpm dev:local
 ```
+
+For faster local update pickup, keep `BOT_RUN_MODE=polling` and set `TELEGRAM_POLLING_TIMEOUT_SECONDS=2` in `.env.local`.
 
 5. Optional local DB UI:
 

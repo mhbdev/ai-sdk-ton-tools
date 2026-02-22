@@ -26,5 +26,17 @@ describe("buildPolicyWrappedTonTools", () => {
     expect(tools.tonSendBlockchainMessageBatch?.needsApproval).toBe(true);
     expect(tools.tonBuildAndSendExternalMessage?.needsApproval).toBe(true);
   });
-});
 
+  it("adds a DNS-by-address alias tool", () => {
+    const tools = buildPolicyWrappedTonTools({
+      apiKey: "test-key",
+      network: "mainnet",
+      chatType: "private",
+    });
+
+    expect(tools.tonFindAddressDnsItems).toBeDefined();
+    expect(tools.tonFindAddressDnsItems?.description).toContain(
+      "Find DNS items/domains for a TON address",
+    );
+  });
+});

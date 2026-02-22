@@ -32,6 +32,7 @@ export type TurnExecutionRequest = {
   telegramUserId: number;
   telegramChatId: number;
   messageThreadId?: number;
+  replyToMessageId?: number;
   chatType: ChatType;
   text: string;
   network: TonNetwork;

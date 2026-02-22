@@ -128,6 +128,15 @@ export const buildPolicyWrappedTonTools = (input: {
     network: input.network,
   }) as Record<string, any>;
 
+  const dnsByAddressSource = rawTools.tonGetAccountDomains;
+  if (dnsByAddressSource) {
+    rawTools.tonFindAddressDnsItems = {
+      ...dnsByAddressSource,
+      description:
+        "Find DNS items/domains for a TON address. Use when the user provides a wallet/account address and asks for DNS records.",
+    };
+  }
+
   const policyTools: Record<string, any> = {};
   for (const [name, definition] of Object.entries(rawTools)) {
     if (SECRET_DISABLED_TOOLS.has(name)) {

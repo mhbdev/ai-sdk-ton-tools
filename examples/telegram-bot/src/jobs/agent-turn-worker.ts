@@ -10,12 +10,14 @@ import { deadLetterQueue } from "@/queue/queues";
 import {
   createTelegramTokenDraftStream,
   getBot,
+  isTelegramMessageThreadNotFoundError,
   sendTelegramText,
 } from "@/telegram/bot";
 
 const sendApprovalCards = async (input: {
   chatId: string;
   messageThreadId?: number;
+  replyToMessageId?: number;
   approvals: Array<{
     approvalId: string;
     toolName: string;
@@ -34,21 +36,48 @@ const sendApprovalCards = async (input: {
       .text("Approve", `approval:${approval.approvalId}:approve`)
       .text("Deny", `approval:${approval.approvalId}:deny`);
 
-    await bot.api.sendMessage(
-      Number(input.chatId),
-      buildApprovalPromptText({
-        approvalId: approval.approvalId,
-        toolName: approval.toolName,
-        toolInput: approval.inputJson,
-        expiresAt: approval.expiresAt,
-      }),
-      {
-        ...(typeof input.messageThreadId === "number"
-          ? { message_thread_id: input.messageThreadId }
-          : {}),
+    const approvalText = buildApprovalPromptText({
+      approvalId: approval.approvalId,
+      toolName: approval.toolName,
+      toolInput: approval.inputJson,
+      expiresAt: approval.expiresAt,
+    });
+
+    const options = {
+      ...(typeof input.messageThreadId === "number"
+        ? { message_thread_id: input.messageThreadId }
+        : {}),
+      ...(typeof input.replyToMessageId === "number"
+        ? {
+            reply_parameters: {
+              message_id: input.replyToMessageId,
+              allow_sending_without_reply: true,
+            },
+          }
+        : {}),
+      reply_markup: keyboard,
+    };
+
+    try {
+      await bot.api.sendMessage(Number(input.chatId), approvalText, options);
+    } catch (error) {
+      if (
+        !isTelegramMessageThreadNotFoundError(error) ||
+        typeof input.messageThreadId !== "number"
+      ) {
+        throw error;
+      }
+
+      logger.warn("Approval card thread not found; retrying in main chat context.", {
+        chatId: input.chatId,
+        messageThreadId: input.messageThreadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      await bot.api.sendMessage(Number(input.chatId), approvalText, {
         reply_markup: keyboard,
-      },
-    );
+      });
+    }
   }
 };
 
@@ -95,11 +124,17 @@ export const createAgentTurnWorker = () =>
               ...(typeof job.data.messageThreadId === "number"
                 ? { messageThreadId: job.data.messageThreadId }
                 : {}),
+              ...(typeof job.data.replyToMessageId === "number"
+                ? { replyToMessageId: job.data.replyToMessageId }
+                : {}),
             });
             await sendApprovalCards({
               chatId: String(job.data.telegramChatId),
               ...(typeof job.data.messageThreadId === "number"
                 ? { messageThreadId: job.data.messageThreadId }
+                : {}),
+              ...(typeof job.data.replyToMessageId === "number"
+                ? { replyToMessageId: job.data.replyToMessageId }
                 : {}),
               approvals: result.approvals,
             });
@@ -122,6 +157,9 @@ export const createAgentTurnWorker = () =>
               {
                 ...(typeof job.data.messageThreadId === "number"
                   ? { messageThreadId: job.data.messageThreadId }
+                  : {}),
+                ...(typeof job.data.replyToMessageId === "number"
+                  ? { replyToMessageId: job.data.replyToMessageId }
                   : {}),
               },
             );

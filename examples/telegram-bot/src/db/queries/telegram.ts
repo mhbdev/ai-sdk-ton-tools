@@ -115,7 +115,7 @@ export const setChatNetwork = async (
     .where(eq(telegramChats.telegramChatId, telegramChatId));
 };
 
-export const getOrCreateSession = async (input: {
+const buildSessionScopeFilter = (input: {
   telegramChatId: string;
   telegramUserId: string;
   messageThreadId?: number;
@@ -125,20 +125,34 @@ export const getOrCreateSession = async (input: {
       ? eq(chatSessions.messageThreadId, input.messageThreadId)
       : isNull(chatSessions.messageThreadId);
 
-  const existingRows = await db
+  return and(
+    eq(chatSessions.telegramChatId, input.telegramChatId),
+    eq(chatSessions.telegramUserId, input.telegramUserId),
+    scopedThreadFilter,
+  );
+};
+
+export const findSessionByScope = async (input: {
+  telegramChatId: string;
+  telegramUserId: string;
+  messageThreadId?: number;
+}) => {
+  const [existing] = await db
     .select()
     .from(chatSessions)
-    .where(
-      and(
-        eq(chatSessions.telegramChatId, input.telegramChatId),
-        eq(chatSessions.telegramUserId, input.telegramUserId),
-        scopedThreadFilter,
-      ),
-    )
+    .where(buildSessionScopeFilter(input))
     .orderBy(desc(chatSessions.createdAt))
     .limit(1);
 
-  const existing = existingRows[0];
+  return existing ?? null;
+};
+
+export const getOrCreateSession = async (input: {
+  telegramChatId: string;
+  telegramUserId: string;
+  messageThreadId?: number;
+}) => {
+  const existing = await findSessionByScope(input);
   if (existing) {
     return existing;
   }
