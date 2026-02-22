@@ -71,8 +71,6 @@ services:
         condition: service_healthy
       telegram-bot-migrate:
         condition: service_completed_successfully
-    expose:
-      - "8787"
     healthcheck:
       test:
         [
@@ -237,8 +235,6 @@ services:
     networks:
       - edge
       - internal
-    expose:
-      - "9090"
     restart: unless-stopped
 
   grafana:
@@ -257,8 +253,6 @@ services:
     networks:
       - edge
       - internal
-    expose:
-      - "3000"
     restart: unless-stopped
 
   postgres-backup:
