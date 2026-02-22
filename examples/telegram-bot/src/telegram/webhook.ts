@@ -11,11 +11,21 @@ export const registerWebhookRoute = (app: FastifyInstance) => {
     async (request, reply) => {
       const pathSecret = request.params.secret;
       if (!verifyWebhookSecret(request, pathSecret)) {
+        logger.warn("Webhook request rejected due to secret mismatch.", {
+          remoteAddress: request.ip,
+          userAgent: request.headers["user-agent"],
+          hasTelegramHeaderSecret:
+            typeof request.headers["x-telegram-bot-api-secret-token"] === "string",
+        });
         return reply.code(401).send({ ok: false });
       }
 
       const body = request.body as Update;
       if (!body || typeof body.update_id !== "number") {
+        logger.warn("Webhook request rejected due to invalid payload.", {
+          remoteAddress: request.ip,
+          userAgent: request.headers["user-agent"],
+        });
         return reply.code(400).send({ ok: false, error: "Invalid Telegram update" });
       }
 

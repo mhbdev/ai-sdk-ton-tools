@@ -178,7 +178,39 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
       } catch (error) {
         throwTelegramAuthHint(error);
       }
-      logger.info("Webhook mode configured.", { webhookUrl });
+      let webhookInfo:
+        | {
+            url: string;
+            pendingUpdateCount: number;
+            lastErrorDate: number | null;
+            lastErrorMessage: string | null;
+            maxConnections: number | null;
+          }
+        | undefined;
+      try {
+        webhookInfo = await retryTelegramBootstrap({
+          label: "getWebhookInfo",
+          run: async () => {
+            const result = await bot.api.getWebhookInfo();
+            return {
+              url: result.url ?? "",
+              pendingUpdateCount: result.pending_update_count,
+              lastErrorDate: result.last_error_date ?? null,
+              lastErrorMessage: result.last_error_message ?? null,
+              maxConnections: result.max_connections ?? null,
+            };
+          },
+        });
+      } catch (error) {
+        logger.warn("Failed to fetch webhook info after setWebhook.", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      logger.info("Webhook mode configured.", {
+        webhookUrl,
+        webhookInfo,
+      });
       return;
     }
 

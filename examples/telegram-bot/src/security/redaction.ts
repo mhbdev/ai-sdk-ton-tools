@@ -1,7 +1,19 @@
-const REDACTION_PATTERNS: Array<RegExp> = [
-  /(bot_token=)([^&\s]+)/gi,
-  /(Bearer\s+)([A-Za-z0-9\-_\.]+)/gi,
-  /([A-Za-z0-9+/]{32,}={0,2})/g,
+const REDACTION_PATTERNS: ReadonlyArray<{
+  regex: RegExp;
+  preservePrefix: boolean;
+}> = [
+  {
+    regex: /(bot_token=)([^&\s]+)/gi,
+    preservePrefix: true,
+  },
+  {
+    regex: /(Bearer\s+)([A-Za-z0-9\-_\.]+)/gi,
+    preservePrefix: true,
+  },
+  {
+    regex: /([A-Za-z0-9+/]{32,}={0,2})/g,
+    preservePrefix: false,
+  },
 ];
 
 const SENSITIVE_KEYS = new Set([
@@ -19,10 +31,20 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 const redactString = (value: string) =>
-  REDACTION_PATTERNS.reduce(
-    (acc, regex) => acc.replace(regex, (_match, prefix) => `${prefix}[REDACTED]`),
-    value,
-  );
+  REDACTION_PATTERNS.reduce((acc, pattern) => {
+    return acc.replace(pattern.regex, (...matchArgs) => {
+      if (!pattern.preservePrefix) {
+        return "[REDACTED]";
+      }
+
+      const prefix = matchArgs[1];
+      if (typeof prefix !== "string") {
+        return "[REDACTED]";
+      }
+
+      return `${prefix}[REDACTED]`;
+    });
+  }, value);
 
 const redactUnknown = (value: unknown): unknown => {
   if (typeof value === "string") {
@@ -49,4 +71,3 @@ const redactUnknown = (value: unknown): unknown => {
 };
 
 export const redactForLogs = <T>(value: T): T => redactUnknown(value) as T;
-
