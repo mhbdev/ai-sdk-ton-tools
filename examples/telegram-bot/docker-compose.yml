@@ -30,6 +30,7 @@ x-bot-env: &bot-env
   KMS_KEY_ID: ${KMS_KEY_ID:?KMS_KEY_ID is required}
   ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY is required}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT-http://otel-collector:4318}
+  DB_REPAIR_BEFORE_MIGRATE: ${DB_REPAIR_BEFORE_MIGRATE:-0}
   TSX_DISABLE_CACHE: "1"
 
 x-bot-common: &bot-common
@@ -49,7 +50,12 @@ x-bot-common: &bot-common
 services:
   telegram-bot-migrate:
     <<: *bot-common
-    command: ["node", "--import", "tsx", "src/db/migrate.ts"]
+    command:
+      [
+        "sh",
+        "-ec",
+        "if [ \"$${DB_REPAIR_BEFORE_MIGRATE:-0}\" = \"1\" ]; then node --import tsx src/db/repair.ts; else node --import tsx src/db/migrate.ts; fi",
+      ]
     environment:
       <<: *bot-env
     depends_on:

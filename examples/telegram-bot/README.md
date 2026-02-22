@@ -28,6 +28,13 @@ pnpm db:generate
 pnpm db:migrate
 ```
 
+If you are reusing an existing Postgres volume and hit schema drift errors
+like missing `response_style_override` or duplicate `message_thread_id`, run:
+
+```bash
+pnpm db:repair
+```
+
 4. Start bot:
 
 ```bash
@@ -133,6 +140,15 @@ cp .env.example .env
 ```bash
 docker compose up -d --build
 ```
+
+If you are reusing an existing production Postgres volume and migrations fail due to
+schema drift, run one deploy with repair enabled:
+
+```bash
+DB_REPAIR_BEFORE_MIGRATE=1 docker compose up -d --build
+```
+
+Then switch back to normal runs (without `DB_REPAIR_BEFORE_MIGRATE=1`).
 
 This compose file does not publish host ports by default. In Dokploy, map your domain to the service container port (bot: `8787`, optional grafana: `3000`, prometheus: `9090`) via Traefik/domain routing.
 

@@ -87,6 +87,7 @@ export const assertDatabaseSchemaCompatibility = async () => {
       "Database schema is not compatible with this build.",
       ...parts,
       "Run DB migrations before starting workers (e.g. `node --import tsx src/db/migrate.ts`).",
+      "If schema drift persists on an existing volume, run `node --import tsx src/db/repair.ts`.",
     ].join(" "),
   );
 };
