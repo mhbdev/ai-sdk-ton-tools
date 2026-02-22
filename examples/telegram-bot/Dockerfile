@@ -35,4 +35,4 @@ USER node
 EXPOSE 8787
 
 ENTRYPOINT ["entrypoint"]
-CMD ["pnpm", "start"]
+CMD ["node", "--import", "tsx", "src/main.ts"]
