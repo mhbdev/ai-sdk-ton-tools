@@ -48,13 +48,33 @@ import {
   cancelWalletConnectFlow,
   getWalletConnectFlowStatus,
 } from "@/wallet/tonconnect";
-import { checkAndIncrementRateLimit } from "@/security/rate-limit";
+import {
+  checkChatSpamLimit,
+  checkUserTurnQuota,
+  formatRateLimitMessage,
+  shouldSendRateLimitNotice,
+} from "@/security/rate-limit";
 
 type SettingsScreen = "menu" | "style" | "risk" | "network" | "wallet";
 
 const APPROVAL_CONFIRMATION_TTL_SECONDS = 30;
 const SETTINGS_CALLBACK_RE = /^cfg:([^:]+):([^:]+):(.+)$/;
 const APPROVAL_CALLBACK_RE = /^ap:([^:]+):(approve|deny|details|refresh)$/;
+const NON_TURN_COMMANDS = new Set([
+  "/start",
+  "/settings",
+  "/network",
+  "/wallet",
+  "/cancel",
+]);
+
+const isNotifiableRateLimitReason = (
+  reason: string,
+): reason is "chat_flood" | "user_burst" | "user_minute" | "user_daily" =>
+  reason === "chat_flood" ||
+  reason === "user_burst" ||
+  reason === "user_minute" ||
+  reason === "user_daily";
 
 const parseChatType = (value: string): ChatType => {
   if (
@@ -1033,24 +1053,23 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
   const turnCorrelationId = createCorrelationId();
   let effectiveMessageThreadId = messageThreadId;
 
-  const allowedUserRate = await checkAndIncrementRateLimit({
-    key: `user:${telegramUserId}`,
-    max: 60,
-    windowSeconds: 60,
+  const chatRateDecision = await checkChatSpamLimit({
+    telegramChatId,
+    telegramUserId,
   });
-  const allowedChatRate = await checkAndIncrementRateLimit({
-    key: `chat:${telegramChatId}`,
-    max: 200,
-    windowSeconds: 60,
-  });
-  if (!allowedUserRate || !allowedChatRate) {
-    await sendTelegramText(
-      telegramChatId,
-      "Rate limit exceeded. Please wait and try again.",
-      {
+  if (!chatRateDecision.allowed) {
+    const blockedReason = isNotifiableRateLimitReason(chatRateDecision.reason)
+      ? chatRateDecision.reason
+      : "chat_flood";
+    const shouldNotify = await shouldSendRateLimitNotice({
+      telegramUserId,
+      reason: blockedReason,
+    });
+    if (shouldNotify) {
+      await sendTelegramText(telegramChatId, formatRateLimitMessage(chatRateDecision), {
         ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
-      },
-    );
+      });
+    }
     return { shouldQueueTurn: false };
   }
 
@@ -1070,6 +1089,28 @@ export const routeUpdate = async (update: Update): Promise<UpdateProcessingResul
 
   if (!existingChat && user) {
     await setChatNetwork(telegramChatId, user.defaultNetwork);
+  }
+
+  const shouldConsumeTurnQuota = !NON_TURN_COMMANDS.has(command);
+  if (shouldConsumeTurnQuota) {
+    const userQuotaDecision = await checkUserTurnQuota({
+      telegramUserId,
+    });
+    if (!userQuotaDecision.allowed) {
+      const blockedReason = isNotifiableRateLimitReason(userQuotaDecision.reason)
+        ? userQuotaDecision.reason
+        : "user_minute";
+      const shouldNotify = await shouldSendRateLimitNotice({
+        telegramUserId,
+        reason: blockedReason,
+      });
+      if (shouldNotify) {
+        await sendTelegramText(telegramChatId, formatRateLimitMessage(userQuotaDecision), {
+          ...(typeof messageThreadId === "number" ? { messageThreadId } : {}),
+        });
+      }
+      return { shouldQueueTurn: false };
+    }
   }
 
   if (!command.startsWith("/")) {

@@ -90,6 +90,16 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 - `BOT_RUN_MODE=webhook`: enable `POST /telegram/webhook/:secret`.
 - `BOT_RUN_MODE=polling`: start long-polling loop.
 
+## Rate Limits
+
+- Chat anti-spam applies to every incoming text message: `RATE_LIMIT_CHAT_MINUTE_MAX` per `RATE_LIMIT_MINUTE_WINDOW_SECONDS`.
+- User quota is charged only for messages that can enqueue AI turns.
+- Non-turn commands are exempt from user quota: `/start`, `/settings`, `/network`, `/wallet`, `/cancel`.
+- Free tier defaults: `RATE_LIMIT_FREE_BURST_MAX=3` per `RATE_LIMIT_BURST_WINDOW_SECONDS=3`, `RATE_LIMIT_FREE_MINUTE_MAX=10` per `RATE_LIMIT_MINUTE_WINDOW_SECONDS=60`, `RATE_LIMIT_FREE_DAILY_MAX=300` per UTC day.
+- Trusted tier is selected by `RATE_LIMIT_TRUSTED_USER_IDS` (comma-separated Telegram user IDs) and scaled by `RATE_LIMIT_TRUSTED_MULTIPLIER` (default `5`).
+- Daily quota resets at `00:00 UTC`.
+- Rate-limit warning messages are cooldown-gated by `RATE_LIMIT_NOTICE_COOLDOWN_SECONDS` (default `20`).
+
 ## Model Provider Routing
 
 - Primary provider: OpenRouter (`OPENROUTER_API_KEY`)

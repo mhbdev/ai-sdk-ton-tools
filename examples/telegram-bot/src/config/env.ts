@@ -34,6 +34,22 @@ const booleanFromEnv = z.preprocess(
   z.boolean().optional(),
 );
 
+const csvStringListFromEnv = z.preprocess(
+  (value) => {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return value;
+    }
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  },
+  z.array(z.string().min(1)).default([]),
+);
+
 const integerFromEnv = (input: {
   min: number;
   max: number;
@@ -95,6 +111,47 @@ const envSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalNonEmptyString,
   TELEGRAM_ENABLE_STREAM_DRAFTS: booleanFromEnv.default(true),
   TOPIC_AUTOCREATE_ENABLED: booleanFromEnv.default(true),
+  RATE_LIMIT_TRUSTED_USER_IDS: csvStringListFromEnv,
+  RATE_LIMIT_BURST_WINDOW_SECONDS: integerFromEnv({
+    min: 1,
+    max: 300,
+    defaultValue: 3,
+  }),
+  RATE_LIMIT_MINUTE_WINDOW_SECONDS: integerFromEnv({
+    min: 1,
+    max: 600,
+    defaultValue: 60,
+  }),
+  RATE_LIMIT_CHAT_MINUTE_MAX: integerFromEnv({
+    min: 1,
+    max: 10_000,
+    defaultValue: 200,
+  }),
+  RATE_LIMIT_FREE_BURST_MAX: integerFromEnv({
+    min: 1,
+    max: 1_000,
+    defaultValue: 3,
+  }),
+  RATE_LIMIT_FREE_MINUTE_MAX: integerFromEnv({
+    min: 1,
+    max: 10_000,
+    defaultValue: 10,
+  }),
+  RATE_LIMIT_FREE_DAILY_MAX: integerFromEnv({
+    min: 1,
+    max: 1_000_000,
+    defaultValue: 300,
+  }),
+  RATE_LIMIT_TRUSTED_MULTIPLIER: integerFromEnv({
+    min: 1,
+    max: 100,
+    defaultValue: 5,
+  }),
+  RATE_LIMIT_NOTICE_COOLDOWN_SECONDS: integerFromEnv({
+    min: 1,
+    max: 600,
+    defaultValue: 20,
+  }),
   APPROVAL_UX_V2_ENABLED: booleanFromEnv.default(true),
   PERSONALIZATION_UX_ENABLED: booleanFromEnv.default(true),
   MULTI_WALLET_ENABLED: booleanFromEnv.default(true),
