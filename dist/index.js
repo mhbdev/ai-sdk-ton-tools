@@ -1,14 +1,45 @@
 // src/ton-tools/client.ts
 import { TonApiClient } from "@ton-api/client";
+import { TonClient } from "@ton/ton";
 var resolveBaseUrl = (options) => {
   if (options.baseUrl) return options.baseUrl;
   if (options.network === "testnet") return "https://testnet.tonapi.io";
   return "https://tonapi.io";
 };
+var resolveStonfiRpcEndpoint = (options) => options.stonfiRpcEndpoint ?? process.env.TON_RPC_ENDPOINT;
+var resolveStonfiRpcApiKey = (options) => options.stonfiRpcApiKey ?? process.env.TON_RPC_API_KEY;
+var resolveStonfiOmnistonApiUrl = (options) => options.stonfiOmnistonApiUrl ?? process.env.STONFI_OMNISTON_API_URL ?? "wss://omni-ws.ston.fi";
+var assertStonfiRpcEndpoint = (endpoint) => {
+  if (endpoint && endpoint.trim().length > 0) {
+    return endpoint.trim();
+  }
+  throw new Error(
+    "STON.fi DEX tools require TON RPC endpoint. Set TonToolsOptions.stonfiRpcEndpoint or TON_RPC_ENDPOINT."
+  );
+};
 var createClient = (options) => new TonApiClient({
   baseUrl: resolveBaseUrl(options),
   apiKey: options.apiKey ?? process.env.TONAPI_API_KEY
 });
+var createStonfiRuntime = (options) => {
+  let tonClient = null;
+  return {
+    getRpcEndpoint: () => resolveStonfiRpcEndpoint(options),
+    getRpcApiKey: () => resolveStonfiRpcApiKey(options),
+    getOmnistonApiUrl: () => resolveStonfiOmnistonApiUrl(options),
+    getTonClient: () => {
+      if (tonClient) {
+        return tonClient;
+      }
+      const endpoint = assertStonfiRpcEndpoint(resolveStonfiRpcEndpoint(options));
+      tonClient = new TonClient({
+        endpoint,
+        apiKey: resolveStonfiRpcApiKey(options)
+      });
+      return tonClient;
+    }
+  };
+};
 
 // src/ton-tools/domains/accounts.ts
 import { z as z2 } from "zod";
@@ -2070,28 +2101,2223 @@ var createWriteTools = ({ client }) => ({
   })
 });
 
-// src/ton-tools.ts
-var createToolsFromClient = (client) => ({
-  ...createAccountTools({ client }),
-  ...createJettonTools({ client }),
-  ...createNftTools({ client }),
-  ...createDnsTools({ client }),
-  ...createRatesTools({ client }),
-  ...createTonConnectTools({ client }),
-  ...createWalletTools({ client }),
-  ...createStakingTools({ client }),
-  ...createStorageTools({ client }),
-  ...createTraceTools({ client }),
-  ...createEventTools({ client }),
-  ...createInscriptionsTools({ client }),
-  ...createEmulationTools({ client }),
-  ...createExtraCurrencyTools({ client }),
-  ...createMultisigTools({ client }),
-  ...createBlockchainTools({ client }),
-  ...createUtilityTools({ client }),
-  ...createWriteTools({ client })
+// src/ton-tools/domains/stonfi-dex.ts
+import { z as z21 } from "zod";
+
+// src/ton-tools/domains/stonfi-shared.ts
+import { DEX } from "@ston-fi/sdk";
+import { Address as Address3, Cell as Cell3 } from "@ton/ton";
+import { z as z20 } from "zod";
+var stonfiDexTypeSchema = z20.enum([
+  "constant_product",
+  "stableswap",
+  "weighted_const_product",
+  "weighted_stableswap"
+]).describe("STON.fi DEX router/pool type.");
+var amountLikeSchema = z20.union([z20.string().min(1), z20.number().int()]).describe("Integer amount in base units as decimal string or integer.");
+var queryIdLikeSchema = z20.union([z20.string().min(1), z20.number().int()]).describe("Optional query id as decimal string or integer.");
+var isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+var parseTonAddressOrThrow = (value, label) => {
+  try {
+    return Address3.parse(value);
+  } catch {
+    throw new Error(`${label} must be a valid TON address.`);
+  }
+};
+var normalizeTonAddress = (value, label) => parseTonAddressOrThrow(value, label).toString();
+var normalizeOptionalTonAddress = (value, label) => value ? normalizeTonAddress(value, label) : void 0;
+var parseBocCellOrThrow = (boc, label) => {
+  try {
+    return Cell3.fromBase64(boc);
+  } catch {
+    throw new Error(`${label} must be a valid base64 BOC.`);
+  }
+};
+var parseOptionalBocCell = (boc, label) => boc ? parseBocCellOrThrow(boc, label) : void 0;
+var toAmountValue = (value, label) => {
+  const normalized = typeof value === "number" ? String(value) : value.trim();
+  if (!/^-?\d+$/.test(normalized)) {
+    throw new Error(`${label} must be an integer value.`);
+  }
+  return normalized;
+};
+var toAmountValueOptional = (value, label) => value === void 0 ? void 0 : toAmountValue(value, label);
+var toQueryIdValue = (value, label) => {
+  if (value === void 0) return void 0;
+  try {
+    return BigInt(value);
+  } catch {
+    throw new Error(`${label} must be a valid integer query id.`);
+  }
+};
+var summarizeCell = (cell, includeBoc = true) => ({
+  hash: cell.hash().toString("hex"),
+  bits: cell.bits.length,
+  refs: cell.refs.length,
+  isExotic: cell.isExotic,
+  ...includeBoc ? { boc: cell.toBoc().toString("base64") } : {}
 });
-var createTonTools = (options = {}) => createToolsFromClient(createClient(options));
+var serializeStonfiValue = (value, seen = /* @__PURE__ */ new WeakSet()) => {
+  if (value === null || value === void 0) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (value instanceof Address3) {
+    return value.toString();
+  }
+  if (value instanceof Cell3) {
+    return summarizeCell(value, true);
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (value instanceof Map) {
+    return Array.from(value.entries()).map(([key, item]) => ({
+      key: serializeStonfiValue(key, seen),
+      value: serializeStonfiValue(item, seen)
+    }));
+  }
+  if (value instanceof Set) {
+    return Array.from(value.values()).map(
+      (item) => serializeStonfiValue(item, seen)
+    );
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString("base64");
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeStonfiValue(item, seen));
+  }
+  if (isRecord(value)) {
+    if (seen.has(value)) {
+      return null;
+    }
+    seen.add(value);
+    const result = {};
+    for (const [key, nested] of Object.entries(value)) {
+      result[key] = serializeStonfiValue(nested, seen);
+    }
+    return result;
+  }
+  return value;
+};
+var routerConstructors = {
+  constant_product: DEX.v2_2.Router.CPI,
+  stableswap: DEX.v2_2.Router.Stable,
+  weighted_const_product: DEX.v2_2.Router.WCPI,
+  weighted_stableswap: DEX.v2_2.Router.WStable
+};
+var poolConstructors = {
+  constant_product: DEX.v2_2.Pool.CPI,
+  stableswap: DEX.v2_2.Pool.Stable,
+  weighted_const_product: DEX.v2_2.Pool.WCPI,
+  weighted_stableswap: DEX.v2_2.Pool.WStable
+};
+var createRouterForDexType = (dexType, routerAddress) => {
+  const Router = routerConstructors[dexType];
+  return new Router(normalizeTonAddress(routerAddress, "routerAddress"));
+};
+var createPoolForDexType = (dexType, poolAddress) => {
+  const Pool = poolConstructors[dexType];
+  return new Pool(normalizeTonAddress(poolAddress, "poolAddress"));
+};
+var createLpAccount = (address) => new DEX.v2_2.LpAccount(normalizeTonAddress(address, "lpAccountAddress"));
+var createVault = (address) => new DEX.v2_2.Vault(normalizeTonAddress(address, "vaultAddress"));
+var createPton = (address) => new DEX.v2_2.pTON(
+  normalizeTonAddress(address, "proxyTonAddress")
+);
+var getRpcTonClient = (stonfi) => {
+  try {
+    return stonfi.getTonClient();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown STON.fi RPC error.";
+    throw new Error(message);
+  }
+};
+var getProviderForContract = (tonClient, address, label) => tonClient.provider(parseTonAddressOrThrow(address, label));
+
+// src/ton-tools/domains/stonfi-dex.ts
+var optionalAddressSchema2 = addressSchema.optional();
+var optionalBocSchema = bocSchema.optional();
+var optionalAmountSchema = amountLikeSchema.optional();
+var optionalQueryIdSchema = queryIdLikeSchema.optional();
+var optionalDeadlineSchema = z21.number().int().positive().optional().describe("Optional unix timestamp deadline.");
+var routerSwapBodyParamsSchema = z21.object({
+  askJettonWalletAddress: addressSchema,
+  receiverAddress: addressSchema,
+  minAskAmount: amountLikeSchema,
+  refundAddress: addressSchema,
+  excessesAddress: optionalAddressSchema2,
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  refundPayload: optionalBocSchema,
+  refundForwardGasAmount: optionalAmountSchema,
+  referralAddress: optionalAddressSchema2,
+  referralValue: optionalAmountSchema,
+  deadline: optionalDeadlineSchema
+});
+var routerProvideLiquidityBodyParamsSchema = z21.object({
+  routerWalletAddress: addressSchema,
+  minLpOut: amountLikeSchema,
+  receiverAddress: addressSchema,
+  refundAddress: addressSchema,
+  excessesAddress: optionalAddressSchema2,
+  bothPositive: z21.boolean(),
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  deadline: optionalDeadlineSchema
+});
+var routerBodyActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("createSwapBody"),
+    params: routerSwapBodyParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("createCrossSwapBody"),
+    params: routerSwapBodyParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("createProvideLiquidityBody"),
+    params: routerProvideLiquidityBodyParamsSchema
+  })
+]);
+var routerSwapJettonToJettonTxParamsSchema = z21.object({
+  userWalletAddress: addressSchema,
+  receiverAddress: optionalAddressSchema2,
+  offerJettonAddress: addressSchema,
+  offerJettonWalletAddress: optionalAddressSchema2,
+  askJettonAddress: addressSchema,
+  askJettonWalletAddress: optionalAddressSchema2,
+  offerAmount: amountLikeSchema,
+  minAskAmount: amountLikeSchema,
+  refundAddress: optionalAddressSchema2,
+  excessesAddress: optionalAddressSchema2,
+  referralAddress: optionalAddressSchema2,
+  referralValue: optionalAmountSchema,
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  refundPayload: optionalBocSchema,
+  refundForwardGasAmount: optionalAmountSchema,
+  deadline: optionalDeadlineSchema,
+  gasAmount: optionalAmountSchema,
+  forwardGasAmount: optionalAmountSchema,
+  queryId: optionalQueryIdSchema,
+  jettonCustomPayload: optionalBocSchema,
+  transferExcessAddress: optionalAddressSchema2
+});
+var routerSwapJettonToTonTxParamsSchema = z21.object({
+  userWalletAddress: addressSchema,
+  receiverAddress: optionalAddressSchema2,
+  offerJettonAddress: addressSchema,
+  offerJettonWalletAddress: optionalAddressSchema2,
+  proxyTonAddress: addressSchema,
+  askJettonWalletAddress: optionalAddressSchema2,
+  offerAmount: amountLikeSchema,
+  minAskAmount: amountLikeSchema,
+  refundAddress: optionalAddressSchema2,
+  excessesAddress: optionalAddressSchema2,
+  referralAddress: optionalAddressSchema2,
+  referralValue: optionalAmountSchema,
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  refundPayload: optionalBocSchema,
+  refundForwardGasAmount: optionalAmountSchema,
+  deadline: optionalDeadlineSchema,
+  gasAmount: optionalAmountSchema,
+  forwardGasAmount: optionalAmountSchema,
+  queryId: optionalQueryIdSchema,
+  jettonCustomPayload: optionalBocSchema,
+  transferExcessAddress: optionalAddressSchema2
+});
+var routerSwapTonToJettonTxParamsSchema = z21.object({
+  userWalletAddress: addressSchema,
+  receiverAddress: optionalAddressSchema2,
+  proxyTonAddress: addressSchema,
+  offerJettonWalletAddress: optionalAddressSchema2,
+  askJettonAddress: addressSchema,
+  askJettonWalletAddress: optionalAddressSchema2,
+  offerAmount: amountLikeSchema,
+  minAskAmount: amountLikeSchema,
+  refundAddress: optionalAddressSchema2,
+  excessesAddress: optionalAddressSchema2,
+  referralAddress: optionalAddressSchema2,
+  referralValue: optionalAmountSchema,
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  refundPayload: optionalBocSchema,
+  refundForwardGasAmount: optionalAmountSchema,
+  deadline: optionalDeadlineSchema,
+  forwardGasAmount: optionalAmountSchema,
+  queryId: optionalQueryIdSchema
+});
+var routerProvideLiquidityJettonTxParamsSchema = z21.object({
+  userWalletAddress: addressSchema,
+  receiverAddress: optionalAddressSchema2,
+  sendTokenAddress: addressSchema,
+  otherTokenAddress: addressSchema,
+  sendAmount: amountLikeSchema,
+  minLpOut: amountLikeSchema,
+  refundAddress: optionalAddressSchema2,
+  excessesAddress: optionalAddressSchema2,
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  deadline: optionalDeadlineSchema,
+  gasAmount: optionalAmountSchema,
+  forwardGasAmount: optionalAmountSchema,
+  queryId: optionalQueryIdSchema,
+  jettonCustomPayload: optionalBocSchema,
+  transferExcessAddress: optionalAddressSchema2
+});
+var routerProvideLiquidityTonTxParamsSchema = z21.object({
+  userWalletAddress: addressSchema,
+  receiverAddress: optionalAddressSchema2,
+  proxyTonAddress: addressSchema,
+  otherTokenAddress: addressSchema,
+  sendAmount: amountLikeSchema,
+  minLpOut: amountLikeSchema,
+  refundAddress: optionalAddressSchema2,
+  excessesAddress: optionalAddressSchema2,
+  bothPositive: z21.boolean().optional(),
+  dexCustomPayload: optionalBocSchema,
+  dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+  deadline: optionalDeadlineSchema,
+  forwardGasAmount: optionalAmountSchema,
+  queryId: optionalQueryIdSchema
+});
+var routerTxActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("getSwapJettonToJettonTxParams"),
+    params: routerSwapJettonToJettonTxParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("getSwapJettonToTonTxParams"),
+    params: routerSwapJettonToTonTxParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("getSwapTonToJettonTxParams"),
+    params: routerSwapTonToJettonTxParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("getProvideLiquidityJettonTxParams"),
+    params: routerProvideLiquidityJettonTxParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("getSingleSideProvideLiquidityJettonTxParams"),
+    params: routerProvideLiquidityJettonTxParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("getProvideLiquidityTonTxParams"),
+    params: routerProvideLiquidityTonTxParamsSchema
+  }),
+  z21.object({
+    action: z21.literal("getSingleSideProvideLiquidityTonTxParams"),
+    params: routerProvideLiquidityTonTxParamsSchema
+  })
+]);
+var poolBodyActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("createCollectFeesBody"),
+    params: z21.object({
+      queryId: optionalQueryIdSchema
+    }).default({})
+  }),
+  z21.object({
+    action: z21.literal("createBurnBody"),
+    params: z21.object({
+      amount: amountLikeSchema,
+      dexCustomPayload: optionalBocSchema,
+      queryId: optionalQueryIdSchema
+    })
+  })
+]);
+var poolTxActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("getCollectFeeTxParams"),
+    params: z21.object({
+      gasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    }).default({})
+  }),
+  z21.object({
+    action: z21.literal("getBurnTxParams"),
+    params: z21.object({
+      amount: amountLikeSchema,
+      userWalletAddress: addressSchema,
+      dexCustomPayload: optionalBocSchema,
+      gasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    })
+  })
+]);
+var lpAccountBodyActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("createRefundBody"),
+    params: z21.object({
+      leftMaybePayload: optionalBocSchema,
+      rightMaybePayload: optionalBocSchema,
+      queryId: optionalQueryIdSchema
+    }).default({})
+  }),
+  z21.object({
+    action: z21.literal("createDirectAddLiquidityBody"),
+    params: z21.object({
+      userWalletAddress: addressSchema,
+      amount0: amountLikeSchema,
+      amount1: amountLikeSchema,
+      minimumLpToMint: optionalAmountSchema,
+      refundAddress: optionalAddressSchema2,
+      excessesAddress: optionalAddressSchema2,
+      dexCustomPayload: optionalBocSchema,
+      dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    })
+  }),
+  z21.object({
+    action: z21.literal("createResetGasBody"),
+    params: z21.object({
+      queryId: optionalQueryIdSchema
+    }).default({})
+  })
+]);
+var lpAccountTxActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("getRefundTxParams"),
+    params: z21.object({
+      leftMaybePayload: optionalBocSchema,
+      rightMaybePayload: optionalBocSchema,
+      gasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    }).default({})
+  }),
+  z21.object({
+    action: z21.literal("getDirectAddLiquidityTxParams"),
+    params: z21.object({
+      userWalletAddress: addressSchema,
+      amount0: amountLikeSchema,
+      amount1: amountLikeSchema,
+      minimumLpToMint: optionalAmountSchema,
+      refundAddress: optionalAddressSchema2,
+      excessesAddress: optionalAddressSchema2,
+      dexCustomPayload: optionalBocSchema,
+      dexCustomPayloadForwardGasAmount: optionalAmountSchema,
+      gasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    })
+  }),
+  z21.object({
+    action: z21.literal("getResetGasTxParams"),
+    params: z21.object({
+      gasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    }).default({})
+  })
+]);
+var vaultBodyActionSchema = z21.object({
+  action: z21.literal("createWithdrawFeeBody"),
+  params: z21.object({
+    queryId: optionalQueryIdSchema
+  }).default({})
+});
+var vaultTxActionSchema = z21.object({
+  action: z21.literal("getWithdrawFeeTxParams"),
+  params: z21.object({
+    gasAmount: optionalAmountSchema,
+    queryId: optionalQueryIdSchema
+  }).default({})
+});
+var ptonBodyActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("createTonTransferBody"),
+    params: z21.object({
+      tonAmount: amountLikeSchema,
+      refundAddress: addressSchema,
+      forwardPayload: optionalBocSchema,
+      queryId: optionalQueryIdSchema
+    })
+  }),
+  z21.object({
+    action: z21.literal("createDeployWalletBody"),
+    params: z21.object({
+      ownerAddress: addressSchema,
+      excessAddress: addressSchema,
+      queryId: optionalQueryIdSchema
+    })
+  })
+]);
+var ptonTxActionSchema = z21.discriminatedUnion("action", [
+  z21.object({
+    action: z21.literal("getTonTransferTxParams"),
+    params: z21.object({
+      tonAmount: amountLikeSchema,
+      destinationAddress: addressSchema,
+      destinationWalletAddress: optionalAddressSchema2,
+      refundAddress: addressSchema,
+      forwardPayload: optionalBocSchema,
+      forwardTonAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    })
+  }),
+  z21.object({
+    action: z21.literal("getDeployWalletTxParams"),
+    params: z21.object({
+      ownerAddress: addressSchema,
+      excessAddress: addressSchema,
+      gasAmount: optionalAmountSchema,
+      queryId: optionalQueryIdSchema
+    })
+  })
+]);
+var requireAddressPair = (first, second, pairName) => {
+  const hasFirst = Boolean(first);
+  const hasSecond = Boolean(second);
+  if (hasFirst !== hasSecond) {
+    throw new Error(`${pairName} requires both addresses to be provided.`);
+  }
+};
+var toSerializedTxParams = (txParams) => serializeStonfiValue(txParams);
+var normalizeRouterSwapBodyParams = (params) => ({
+  askJettonWalletAddress: normalizeTonAddress(
+    params.askJettonWalletAddress,
+    "params.askJettonWalletAddress"
+  ),
+  receiverAddress: normalizeTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  minAskAmount: toAmountValue(params.minAskAmount, "params.minAskAmount"),
+  refundAddress: normalizeTonAddress(params.refundAddress, "params.refundAddress"),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  refundPayload: parseOptionalBocCell(params.refundPayload, "params.refundPayload"),
+  refundForwardGasAmount: toAmountValueOptional(
+    params.refundForwardGasAmount,
+    "params.refundForwardGasAmount"
+  ),
+  referralAddress: normalizeOptionalTonAddress(
+    params.referralAddress,
+    "params.referralAddress"
+  ),
+  referralValue: toAmountValueOptional(params.referralValue, "params.referralValue"),
+  deadline: params.deadline
+});
+var normalizeRouterProvideLiquidityBodyParams = (params) => ({
+  routerWalletAddress: normalizeTonAddress(
+    params.routerWalletAddress,
+    "params.routerWalletAddress"
+  ),
+  minLpOut: toAmountValue(params.minLpOut, "params.minLpOut"),
+  receiverAddress: normalizeTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  refundAddress: normalizeTonAddress(params.refundAddress, "params.refundAddress"),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  bothPositive: params.bothPositive,
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  deadline: params.deadline
+});
+var normalizeRouterSwapJettonToJettonTxParams = (params) => ({
+  userWalletAddress: normalizeTonAddress(
+    params.userWalletAddress,
+    "params.userWalletAddress"
+  ),
+  receiverAddress: normalizeOptionalTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  offerJettonAddress: normalizeTonAddress(
+    params.offerJettonAddress,
+    "params.offerJettonAddress"
+  ),
+  offerJettonWalletAddress: normalizeOptionalTonAddress(
+    params.offerJettonWalletAddress,
+    "params.offerJettonWalletAddress"
+  ),
+  askJettonAddress: normalizeTonAddress(
+    params.askJettonAddress,
+    "params.askJettonAddress"
+  ),
+  askJettonWalletAddress: normalizeOptionalTonAddress(
+    params.askJettonWalletAddress,
+    "params.askJettonWalletAddress"
+  ),
+  offerAmount: toAmountValue(params.offerAmount, "params.offerAmount"),
+  minAskAmount: toAmountValue(params.minAskAmount, "params.minAskAmount"),
+  refundAddress: normalizeOptionalTonAddress(
+    params.refundAddress,
+    "params.refundAddress"
+  ),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  referralAddress: normalizeOptionalTonAddress(
+    params.referralAddress,
+    "params.referralAddress"
+  ),
+  referralValue: toAmountValueOptional(params.referralValue, "params.referralValue"),
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  refundPayload: parseOptionalBocCell(params.refundPayload, "params.refundPayload"),
+  refundForwardGasAmount: toAmountValueOptional(
+    params.refundForwardGasAmount,
+    "params.refundForwardGasAmount"
+  ),
+  deadline: params.deadline,
+  gasAmount: toAmountValueOptional(params.gasAmount, "params.gasAmount"),
+  forwardGasAmount: toAmountValueOptional(
+    params.forwardGasAmount,
+    "params.forwardGasAmount"
+  ),
+  queryId: toQueryIdValue(params.queryId, "params.queryId"),
+  jettonCustomPayload: parseOptionalBocCell(
+    params.jettonCustomPayload,
+    "params.jettonCustomPayload"
+  ),
+  transferExcessAddress: normalizeOptionalTonAddress(
+    params.transferExcessAddress,
+    "params.transferExcessAddress"
+  )
+});
+var normalizeRouterSwapJettonToTonTxParams = (params) => ({
+  userWalletAddress: normalizeTonAddress(
+    params.userWalletAddress,
+    "params.userWalletAddress"
+  ),
+  receiverAddress: normalizeOptionalTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  offerJettonAddress: normalizeTonAddress(
+    params.offerJettonAddress,
+    "params.offerJettonAddress"
+  ),
+  offerJettonWalletAddress: normalizeOptionalTonAddress(
+    params.offerJettonWalletAddress,
+    "params.offerJettonWalletAddress"
+  ),
+  proxyTon: createPton(params.proxyTonAddress),
+  askJettonWalletAddress: normalizeOptionalTonAddress(
+    params.askJettonWalletAddress,
+    "params.askJettonWalletAddress"
+  ),
+  offerAmount: toAmountValue(params.offerAmount, "params.offerAmount"),
+  minAskAmount: toAmountValue(params.minAskAmount, "params.minAskAmount"),
+  refundAddress: normalizeOptionalTonAddress(
+    params.refundAddress,
+    "params.refundAddress"
+  ),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  referralAddress: normalizeOptionalTonAddress(
+    params.referralAddress,
+    "params.referralAddress"
+  ),
+  referralValue: toAmountValueOptional(params.referralValue, "params.referralValue"),
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  refundPayload: parseOptionalBocCell(params.refundPayload, "params.refundPayload"),
+  refundForwardGasAmount: toAmountValueOptional(
+    params.refundForwardGasAmount,
+    "params.refundForwardGasAmount"
+  ),
+  deadline: params.deadline,
+  gasAmount: toAmountValueOptional(params.gasAmount, "params.gasAmount"),
+  forwardGasAmount: toAmountValueOptional(
+    params.forwardGasAmount,
+    "params.forwardGasAmount"
+  ),
+  queryId: toQueryIdValue(params.queryId, "params.queryId"),
+  jettonCustomPayload: parseOptionalBocCell(
+    params.jettonCustomPayload,
+    "params.jettonCustomPayload"
+  ),
+  transferExcessAddress: normalizeOptionalTonAddress(
+    params.transferExcessAddress,
+    "params.transferExcessAddress"
+  )
+});
+var normalizeRouterSwapTonToJettonTxParams = (params) => ({
+  userWalletAddress: normalizeTonAddress(
+    params.userWalletAddress,
+    "params.userWalletAddress"
+  ),
+  receiverAddress: normalizeOptionalTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  proxyTon: createPton(params.proxyTonAddress),
+  offerJettonWalletAddress: normalizeOptionalTonAddress(
+    params.offerJettonWalletAddress,
+    "params.offerJettonWalletAddress"
+  ),
+  askJettonAddress: normalizeTonAddress(
+    params.askJettonAddress,
+    "params.askJettonAddress"
+  ),
+  askJettonWalletAddress: normalizeOptionalTonAddress(
+    params.askJettonWalletAddress,
+    "params.askJettonWalletAddress"
+  ),
+  offerAmount: toAmountValue(params.offerAmount, "params.offerAmount"),
+  minAskAmount: toAmountValue(params.minAskAmount, "params.minAskAmount"),
+  refundAddress: normalizeOptionalTonAddress(
+    params.refundAddress,
+    "params.refundAddress"
+  ),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  referralAddress: normalizeOptionalTonAddress(
+    params.referralAddress,
+    "params.referralAddress"
+  ),
+  referralValue: toAmountValueOptional(params.referralValue, "params.referralValue"),
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  refundPayload: parseOptionalBocCell(params.refundPayload, "params.refundPayload"),
+  refundForwardGasAmount: toAmountValueOptional(
+    params.refundForwardGasAmount,
+    "params.refundForwardGasAmount"
+  ),
+  deadline: params.deadline,
+  forwardGasAmount: toAmountValueOptional(
+    params.forwardGasAmount,
+    "params.forwardGasAmount"
+  ),
+  queryId: toQueryIdValue(params.queryId, "params.queryId")
+});
+var normalizeRouterProvideLiquidityJettonTxParams = (params) => ({
+  userWalletAddress: normalizeTonAddress(
+    params.userWalletAddress,
+    "params.userWalletAddress"
+  ),
+  receiverAddress: normalizeOptionalTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  sendTokenAddress: normalizeTonAddress(
+    params.sendTokenAddress,
+    "params.sendTokenAddress"
+  ),
+  otherTokenAddress: normalizeTonAddress(
+    params.otherTokenAddress,
+    "params.otherTokenAddress"
+  ),
+  sendAmount: toAmountValue(params.sendAmount, "params.sendAmount"),
+  minLpOut: toAmountValue(params.minLpOut, "params.minLpOut"),
+  refundAddress: normalizeOptionalTonAddress(
+    params.refundAddress,
+    "params.refundAddress"
+  ),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  deadline: params.deadline,
+  gasAmount: toAmountValueOptional(params.gasAmount, "params.gasAmount"),
+  forwardGasAmount: toAmountValueOptional(
+    params.forwardGasAmount,
+    "params.forwardGasAmount"
+  ),
+  queryId: toQueryIdValue(params.queryId, "params.queryId"),
+  jettonCustomPayload: parseOptionalBocCell(
+    params.jettonCustomPayload,
+    "params.jettonCustomPayload"
+  ),
+  transferExcessAddress: normalizeOptionalTonAddress(
+    params.transferExcessAddress,
+    "params.transferExcessAddress"
+  )
+});
+var normalizeRouterProvideLiquidityTonTxParams = (params) => ({
+  userWalletAddress: normalizeTonAddress(
+    params.userWalletAddress,
+    "params.userWalletAddress"
+  ),
+  receiverAddress: normalizeOptionalTonAddress(
+    params.receiverAddress,
+    "params.receiverAddress"
+  ),
+  proxyTon: createPton(params.proxyTonAddress),
+  otherTokenAddress: normalizeTonAddress(
+    params.otherTokenAddress,
+    "params.otherTokenAddress"
+  ),
+  sendAmount: toAmountValue(params.sendAmount, "params.sendAmount"),
+  minLpOut: toAmountValue(params.minLpOut, "params.minLpOut"),
+  refundAddress: normalizeOptionalTonAddress(
+    params.refundAddress,
+    "params.refundAddress"
+  ),
+  excessesAddress: normalizeOptionalTonAddress(
+    params.excessesAddress,
+    "params.excessesAddress"
+  ),
+  bothPositive: params.bothPositive,
+  dexCustomPayload: parseOptionalBocCell(
+    params.dexCustomPayload,
+    "params.dexCustomPayload"
+  ),
+  dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+    params.dexCustomPayloadForwardGasAmount,
+    "params.dexCustomPayloadForwardGasAmount"
+  ),
+  deadline: params.deadline,
+  forwardGasAmount: toAmountValueOptional(
+    params.forwardGasAmount,
+    "params.forwardGasAmount"
+  ),
+  queryId: toQueryIdValue(params.queryId, "params.queryId")
+});
+var normalizePoolBurnBodyParams = (params) => {
+  if (!("amount" in params)) {
+    return params;
+  }
+  return {
+    amount: toAmountValue(params.amount, "params.amount"),
+    dexCustomPayload: parseOptionalBocCell(
+      params.dexCustomPayload,
+      "params.dexCustomPayload"
+    ),
+    queryId: toQueryIdValue(params.queryId, "params.queryId")
+  };
+};
+var createStonfiDexTools = ({ stonfi }) => ({
+  tonStonfiDexGetRouterData: jsonSafeTool({
+    description: "Get STON.fi router version and state data for a v2_2 DEX router.",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      routerAddress: addressSchema
+    }),
+    execute: async ({ dexType, routerAddress }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedRouterAddress = normalizeTonAddress(
+        routerAddress,
+        "routerAddress"
+      );
+      const router = createRouterForDexType(dexType, normalizedRouterAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedRouterAddress,
+        "routerAddress"
+      );
+      const [routerVersion, routerData] = await Promise.all([
+        router.getRouterVersion(provider),
+        router.getRouterData(provider)
+      ]);
+      return serializeStonfiValue({
+        dexVersion: "v2_2",
+        dexType,
+        routerAddress: normalizedRouterAddress,
+        routerVersion,
+        routerData
+      });
+    }
+  }),
+  tonStonfiDexResolveAddresses: jsonSafeTool({
+    description: "Resolve pool/vault addresses and optional contracts via STON.fi v2_2 router.",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      routerAddress: addressSchema,
+      token0Address: optionalAddressSchema2,
+      token1Address: optionalAddressSchema2,
+      userAddress: optionalAddressSchema2,
+      tokenWalletAddress: optionalAddressSchema2,
+      tokenMinterAddress: optionalAddressSchema2,
+      includePoolData: z21.boolean().default(false).describe("Also fetch pool data when resolving pool contract."),
+      includeVaultData: z21.boolean().default(false).describe("Also fetch vault data when resolving vault contract.")
+    }),
+    execute: async ({
+      dexType,
+      routerAddress,
+      token0Address,
+      token1Address,
+      userAddress,
+      tokenWalletAddress,
+      tokenMinterAddress,
+      includePoolData,
+      includeVaultData
+    }) => {
+      requireAddressPair(token0Address, token1Address, "Pool resolution");
+      if (includePoolData && (!token0Address || !token1Address)) {
+        throw new Error(
+          "includePoolData requires token0Address and token1Address."
+        );
+      }
+      if (includeVaultData && (!userAddress || !tokenMinterAddress)) {
+        throw new Error(
+          "includeVaultData requires userAddress and tokenMinterAddress."
+        );
+      }
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedRouterAddress = normalizeTonAddress(
+        routerAddress,
+        "routerAddress"
+      );
+      const router = createRouterForDexType(dexType, normalizedRouterAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedRouterAddress,
+        "routerAddress"
+      );
+      const result = {
+        dexVersion: "v2_2",
+        dexType,
+        routerAddress: normalizedRouterAddress
+      };
+      if (token0Address && token1Address) {
+        const normalizedToken0 = normalizeTonAddress(token0Address, "token0Address");
+        const normalizedToken1 = normalizeTonAddress(token1Address, "token1Address");
+        const poolAddress = await router.getPoolAddress(provider, {
+          token0: normalizedToken0,
+          token1: normalizedToken1
+        });
+        const poolAddressByJettonMinters = await router.getPoolAddressByJettonMinters(
+          provider,
+          {
+            token0: normalizedToken0,
+            token1: normalizedToken1
+          }
+        );
+        const poolContract = await router.getPool(provider, {
+          token0: normalizedToken0,
+          token1: normalizedToken1
+        });
+        result.token0Address = normalizedToken0;
+        result.token1Address = normalizedToken1;
+        result.poolAddress = poolAddress.toString();
+        result.poolAddressByJettonMinters = poolAddressByJettonMinters.toString();
+        result.poolContractAddress = poolContract.address.toString();
+        if (includePoolData) {
+          const poolProvider = getProviderForContract(
+            tonClient,
+            poolContract.address.toString(),
+            "poolAddress"
+          );
+          result.poolData = await poolContract.getPoolData(poolProvider);
+        }
+      }
+      if (userAddress && tokenWalletAddress) {
+        const normalizedUser = normalizeTonAddress(userAddress, "userAddress");
+        const normalizedTokenWallet = normalizeTonAddress(
+          tokenWalletAddress,
+          "tokenWalletAddress"
+        );
+        const vaultAddress = await router.getVaultAddress(provider, {
+          user: normalizedUser,
+          tokenWallet: normalizedTokenWallet
+        });
+        result.userAddress = normalizedUser;
+        result.tokenWalletAddress = normalizedTokenWallet;
+        result.vaultAddress = vaultAddress.toString();
+      }
+      if (userAddress && tokenMinterAddress) {
+        const normalizedUser = normalizeTonAddress(userAddress, "userAddress");
+        const normalizedTokenMinter = normalizeTonAddress(
+          tokenMinterAddress,
+          "tokenMinterAddress"
+        );
+        const vault = await router.getVault(provider, {
+          user: normalizedUser,
+          tokenMinter: normalizedTokenMinter
+        });
+        result.userAddress = normalizedUser;
+        result.tokenMinterAddress = normalizedTokenMinter;
+        result.vaultContractAddress = vault.address.toString();
+        if (includeVaultData) {
+          const vaultProvider = getProviderForContract(
+            tonClient,
+            vault.address.toString(),
+            "vaultAddress"
+          );
+          result.vaultData = await vault.getVaultData(vaultProvider);
+        }
+      }
+      return serializeStonfiValue(result);
+    }
+  }),
+  tonStonfiDexGetPoolData: jsonSafeTool({
+    description: "Get STON.fi pool type/data and optionally resolve LP account and jetton wallet data.",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      poolAddress: addressSchema,
+      ownerAddress: optionalAddressSchema2,
+      includeLpAccountData: z21.boolean().default(false).describe("When ownerAddress is provided, also fetch LP account data."),
+      jettonWalletOwnerAddress: optionalAddressSchema2,
+      includeJettonWalletData: z21.boolean().default(false).describe(
+        "When jettonWalletOwnerAddress is provided, also fetch jetton wallet data and balance."
+      )
+    }),
+    execute: async ({
+      dexType,
+      poolAddress,
+      ownerAddress,
+      includeLpAccountData,
+      jettonWalletOwnerAddress,
+      includeJettonWalletData
+    }) => {
+      if (includeLpAccountData && !ownerAddress) {
+        throw new Error("includeLpAccountData requires ownerAddress.");
+      }
+      if (includeJettonWalletData && !jettonWalletOwnerAddress) {
+        throw new Error(
+          "includeJettonWalletData requires jettonWalletOwnerAddress."
+        );
+      }
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedPoolAddress = normalizeTonAddress(poolAddress, "poolAddress");
+      const pool = createPoolForDexType(dexType, normalizedPoolAddress);
+      const poolProvider = getProviderForContract(
+        tonClient,
+        normalizedPoolAddress,
+        "poolAddress"
+      );
+      const [poolType, poolData] = await Promise.all([
+        pool.getPoolType(poolProvider),
+        pool.getPoolData(poolProvider)
+      ]);
+      const result = {
+        dexVersion: "v2_2",
+        dexType,
+        poolAddress: normalizedPoolAddress,
+        poolType,
+        poolData
+      };
+      if (ownerAddress) {
+        const normalizedOwnerAddress = normalizeTonAddress(ownerAddress, "ownerAddress");
+        const lpAccountAddress = await pool.getLpAccountAddress(poolProvider, {
+          ownerAddress: normalizedOwnerAddress
+        });
+        const lpAccount = await pool.getLpAccount(poolProvider, {
+          ownerAddress: normalizedOwnerAddress
+        });
+        result.ownerAddress = normalizedOwnerAddress;
+        result.lpAccountAddress = lpAccountAddress.toString();
+        result.lpAccountContractAddress = lpAccount.address.toString();
+        if (includeLpAccountData) {
+          const lpProvider = getProviderForContract(
+            tonClient,
+            lpAccount.address.toString(),
+            "lpAccountAddress"
+          );
+          result.lpAccountData = await lpAccount.getLpAccountData(lpProvider);
+        }
+      }
+      if (jettonWalletOwnerAddress) {
+        const normalizedJettonWalletOwner = normalizeTonAddress(
+          jettonWalletOwnerAddress,
+          "jettonWalletOwnerAddress"
+        );
+        const jettonWallet = await pool.getJettonWallet(poolProvider, {
+          ownerAddress: normalizedJettonWalletOwner
+        });
+        result.jettonWalletOwnerAddress = normalizedJettonWalletOwner;
+        result.jettonWalletAddress = jettonWallet.address.toString();
+        if (includeJettonWalletData) {
+          const jettonWalletProvider = getProviderForContract(
+            tonClient,
+            jettonWallet.address.toString(),
+            "jettonWalletAddress"
+          );
+          const [jettonWalletData, jettonWalletBalance] = await Promise.all([
+            jettonWallet.getWalletData(jettonWalletProvider),
+            jettonWallet.getBalance(jettonWalletProvider)
+          ]);
+          result.jettonWalletData = jettonWalletData;
+          result.jettonWalletBalance = jettonWalletBalance;
+        }
+      }
+      return serializeStonfiValue(result);
+    }
+  }),
+  tonStonfiDexGetLpAccountData: jsonSafeTool({
+    description: "Get STON.fi LP account state data.",
+    inputSchema: z21.object({
+      lpAccountAddress: addressSchema
+    }),
+    execute: async ({ lpAccountAddress }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedLpAddress = normalizeTonAddress(
+        lpAccountAddress,
+        "lpAccountAddress"
+      );
+      const lpAccount = createLpAccount(normalizedLpAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedLpAddress,
+        "lpAccountAddress"
+      );
+      const lpAccountData = await lpAccount.getLpAccountData(provider);
+      return serializeStonfiValue({
+        dexVersion: "v2_2",
+        lpAccountAddress: normalizedLpAddress,
+        lpAccountData
+      });
+    }
+  }),
+  tonStonfiDexGetVaultData: jsonSafeTool({
+    description: "Get STON.fi vault state data.",
+    inputSchema: z21.object({
+      vaultAddress: addressSchema
+    }),
+    execute: async ({ vaultAddress }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedVaultAddress = normalizeTonAddress(
+        vaultAddress,
+        "vaultAddress"
+      );
+      const vault = createVault(normalizedVaultAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedVaultAddress,
+        "vaultAddress"
+      );
+      const vaultData = await vault.getVaultData(provider);
+      return serializeStonfiValue({
+        dexVersion: "v2_2",
+        vaultAddress: normalizedVaultAddress,
+        vaultData
+      });
+    }
+  }),
+  tonStonfiDexBuildRouterBody: jsonSafeTool({
+    description: "Build STON.fi v2_2 router payload bodies (swap, cross-swap, provide-liquidity).",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      routerAddress: addressSchema,
+      request: routerBodyActionSchema
+    }),
+    execute: async ({ dexType, routerAddress, request }) => {
+      getRpcTonClient(stonfi);
+      const normalizedRouterAddress = normalizeTonAddress(
+        routerAddress,
+        "routerAddress"
+      );
+      const router = createRouterForDexType(dexType, normalizedRouterAddress);
+      switch (request.action) {
+        case "createSwapBody": {
+          const body = await router.createSwapBody(
+            normalizeRouterSwapBodyParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+        case "createCrossSwapBody": {
+          const body = await router.createCrossSwapBody(
+            normalizeRouterSwapBodyParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+        case "createProvideLiquidityBody": {
+          const body = await router.createProvideLiquidityBody(
+            normalizeRouterProvideLiquidityBodyParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildRouterTx: jsonSafeTool({
+    description: "Build unsigned STON.fi v2_2 router transactions.",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      routerAddress: addressSchema,
+      request: routerTxActionSchema
+    }),
+    execute: async ({ dexType, routerAddress, request }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedRouterAddress = normalizeTonAddress(
+        routerAddress,
+        "routerAddress"
+      );
+      const router = createRouterForDexType(dexType, normalizedRouterAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedRouterAddress,
+        "routerAddress"
+      );
+      switch (request.action) {
+        case "getSwapJettonToJettonTxParams": {
+          const txParams = await router.getSwapJettonToJettonTxParams(
+            provider,
+            normalizeRouterSwapJettonToJettonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getSwapJettonToTonTxParams": {
+          const txParams = await router.getSwapJettonToTonTxParams(
+            provider,
+            normalizeRouterSwapJettonToTonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getSwapTonToJettonTxParams": {
+          const txParams = await router.getSwapTonToJettonTxParams(
+            provider,
+            normalizeRouterSwapTonToJettonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getProvideLiquidityJettonTxParams": {
+          const txParams = await router.getProvideLiquidityJettonTxParams(
+            provider,
+            normalizeRouterProvideLiquidityJettonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getSingleSideProvideLiquidityJettonTxParams": {
+          const txParams = await router.getSingleSideProvideLiquidityJettonTxParams(
+            provider,
+            normalizeRouterProvideLiquidityJettonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getProvideLiquidityTonTxParams": {
+          const txParams = await router.getProvideLiquidityTonTxParams(
+            provider,
+            normalizeRouterProvideLiquidityTonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getSingleSideProvideLiquidityTonTxParams": {
+          const txParams = await router.getSingleSideProvideLiquidityTonTxParams(
+            provider,
+            normalizeRouterProvideLiquidityTonTxParams(request.params)
+          );
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            routerAddress: normalizedRouterAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildPoolBody: jsonSafeTool({
+    description: "Build STON.fi v2_2 pool payload bodies.",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      poolAddress: addressSchema,
+      request: poolBodyActionSchema
+    }),
+    execute: async ({ dexType, poolAddress, request }) => {
+      getRpcTonClient(stonfi);
+      const normalizedPoolAddress = normalizeTonAddress(poolAddress, "poolAddress");
+      const pool = createPoolForDexType(dexType, normalizedPoolAddress);
+      switch (request.action) {
+        case "createCollectFeesBody": {
+          const body = await pool.createCollectFeesBody({
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            poolAddress: normalizedPoolAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+        case "createBurnBody": {
+          const normalized = normalizePoolBurnBodyParams(request.params);
+          if (!("amount" in normalized)) {
+            throw new Error("createBurnBody requires amount.");
+          }
+          const body = await pool.createBurnBody(normalized);
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            poolAddress: normalizedPoolAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildPoolTx: jsonSafeTool({
+    description: "Build unsigned STON.fi v2_2 pool transactions.",
+    inputSchema: z21.object({
+      dexType: stonfiDexTypeSchema,
+      poolAddress: addressSchema,
+      request: poolTxActionSchema
+    }),
+    execute: async ({ dexType, poolAddress, request }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedPoolAddress = normalizeTonAddress(poolAddress, "poolAddress");
+      const pool = createPoolForDexType(dexType, normalizedPoolAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedPoolAddress,
+        "poolAddress"
+      );
+      switch (request.action) {
+        case "getCollectFeeTxParams": {
+          const txParams = await pool.getCollectFeeTxParams(provider, {
+            gasAmount: toAmountValueOptional(
+              request.params.gasAmount,
+              "params.gasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            poolAddress: normalizedPoolAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getBurnTxParams": {
+          const txParams = await pool.getBurnTxParams(provider, {
+            amount: toAmountValue(request.params.amount, "params.amount"),
+            userWalletAddress: normalizeTonAddress(
+              request.params.userWalletAddress,
+              "params.userWalletAddress"
+            ),
+            dexCustomPayload: parseOptionalBocCell(
+              request.params.dexCustomPayload,
+              "params.dexCustomPayload"
+            ),
+            gasAmount: toAmountValueOptional(
+              request.params.gasAmount,
+              "params.gasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            dexType,
+            poolAddress: normalizedPoolAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildLpAccountBody: jsonSafeTool({
+    description: "Build STON.fi v2_2 LP account payload bodies.",
+    inputSchema: z21.object({
+      lpAccountAddress: addressSchema,
+      request: lpAccountBodyActionSchema
+    }),
+    execute: async ({ lpAccountAddress, request }) => {
+      getRpcTonClient(stonfi);
+      const normalizedLpAddress = normalizeTonAddress(
+        lpAccountAddress,
+        "lpAccountAddress"
+      );
+      const lpAccount = createLpAccount(normalizedLpAddress);
+      switch (request.action) {
+        case "createRefundBody": {
+          const body = await lpAccount.createRefundBody({
+            leftMaybePayload: parseOptionalBocCell(
+              request.params.leftMaybePayload,
+              "params.leftMaybePayload"
+            ),
+            rightMaybePayload: parseOptionalBocCell(
+              request.params.rightMaybePayload,
+              "params.rightMaybePayload"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            lpAccountAddress: normalizedLpAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+        case "createDirectAddLiquidityBody": {
+          const body = await lpAccount.createDirectAddLiquidityBody({
+            userWalletAddress: normalizeTonAddress(
+              request.params.userWalletAddress,
+              "params.userWalletAddress"
+            ),
+            amount0: toAmountValue(request.params.amount0, "params.amount0"),
+            amount1: toAmountValue(request.params.amount1, "params.amount1"),
+            minimumLpToMint: toAmountValueOptional(
+              request.params.minimumLpToMint,
+              "params.minimumLpToMint"
+            ),
+            refundAddress: normalizeOptionalTonAddress(
+              request.params.refundAddress,
+              "params.refundAddress"
+            ),
+            excessesAddress: normalizeOptionalTonAddress(
+              request.params.excessesAddress,
+              "params.excessesAddress"
+            ),
+            dexCustomPayload: parseOptionalBocCell(
+              request.params.dexCustomPayload,
+              "params.dexCustomPayload"
+            ),
+            dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+              request.params.dexCustomPayloadForwardGasAmount,
+              "params.dexCustomPayloadForwardGasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            lpAccountAddress: normalizedLpAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+        case "createResetGasBody": {
+          const body = await lpAccount.createResetGasBody({
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            lpAccountAddress: normalizedLpAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildLpAccountTx: jsonSafeTool({
+    description: "Build unsigned STON.fi v2_2 LP account transactions.",
+    inputSchema: z21.object({
+      lpAccountAddress: addressSchema,
+      request: lpAccountTxActionSchema
+    }),
+    execute: async ({ lpAccountAddress, request }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedLpAddress = normalizeTonAddress(
+        lpAccountAddress,
+        "lpAccountAddress"
+      );
+      const lpAccount = createLpAccount(normalizedLpAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedLpAddress,
+        "lpAccountAddress"
+      );
+      switch (request.action) {
+        case "getRefundTxParams": {
+          const txParams = await lpAccount.getRefundTxParams(provider, {
+            leftMaybePayload: parseOptionalBocCell(
+              request.params.leftMaybePayload,
+              "params.leftMaybePayload"
+            ),
+            rightMaybePayload: parseOptionalBocCell(
+              request.params.rightMaybePayload,
+              "params.rightMaybePayload"
+            ),
+            gasAmount: toAmountValueOptional(
+              request.params.gasAmount,
+              "params.gasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            lpAccountAddress: normalizedLpAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getDirectAddLiquidityTxParams": {
+          const txParams = await lpAccount.getDirectAddLiquidityTxParams(provider, {
+            userWalletAddress: normalizeTonAddress(
+              request.params.userWalletAddress,
+              "params.userWalletAddress"
+            ),
+            amount0: toAmountValue(request.params.amount0, "params.amount0"),
+            amount1: toAmountValue(request.params.amount1, "params.amount1"),
+            minimumLpToMint: toAmountValueOptional(
+              request.params.minimumLpToMint,
+              "params.minimumLpToMint"
+            ),
+            refundAddress: normalizeOptionalTonAddress(
+              request.params.refundAddress,
+              "params.refundAddress"
+            ),
+            excessesAddress: normalizeOptionalTonAddress(
+              request.params.excessesAddress,
+              "params.excessesAddress"
+            ),
+            dexCustomPayload: parseOptionalBocCell(
+              request.params.dexCustomPayload,
+              "params.dexCustomPayload"
+            ),
+            dexCustomPayloadForwardGasAmount: toAmountValueOptional(
+              request.params.dexCustomPayloadForwardGasAmount,
+              "params.dexCustomPayloadForwardGasAmount"
+            ),
+            gasAmount: toAmountValueOptional(
+              request.params.gasAmount,
+              "params.gasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            lpAccountAddress: normalizedLpAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getResetGasTxParams": {
+          const txParams = await lpAccount.getResetGasTxParams(provider, {
+            gasAmount: toAmountValueOptional(
+              request.params.gasAmount,
+              "params.gasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            lpAccountAddress: normalizedLpAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildVaultBody: jsonSafeTool({
+    description: "Build STON.fi v2_2 vault payload bodies.",
+    inputSchema: z21.object({
+      vaultAddress: addressSchema,
+      request: vaultBodyActionSchema
+    }),
+    execute: async ({ vaultAddress, request }) => {
+      getRpcTonClient(stonfi);
+      const normalizedVaultAddress = normalizeTonAddress(
+        vaultAddress,
+        "vaultAddress"
+      );
+      const vault = createVault(normalizedVaultAddress);
+      const body = await vault.createWithdrawFeeBody({
+        queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+      });
+      return serializeStonfiValue({
+        dexVersion: "v2_2",
+        vaultAddress: normalizedVaultAddress,
+        action: request.action,
+        body: summarizeCell(body, true)
+      });
+    }
+  }),
+  tonStonfiDexBuildVaultTx: jsonSafeTool({
+    description: "Build unsigned STON.fi v2_2 vault transactions.",
+    inputSchema: z21.object({
+      vaultAddress: addressSchema,
+      request: vaultTxActionSchema
+    }),
+    execute: async ({ vaultAddress, request }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedVaultAddress = normalizeTonAddress(
+        vaultAddress,
+        "vaultAddress"
+      );
+      const vault = createVault(normalizedVaultAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedVaultAddress,
+        "vaultAddress"
+      );
+      const txParams = await vault.getWithdrawFeeTxParams(provider, {
+        gasAmount: toAmountValueOptional(request.params.gasAmount, "params.gasAmount"),
+        queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+      });
+      return serializeStonfiValue({
+        dexVersion: "v2_2",
+        vaultAddress: normalizedVaultAddress,
+        action: request.action,
+        txParams: toSerializedTxParams(txParams)
+      });
+    }
+  }),
+  tonStonfiDexBuildPtonBody: jsonSafeTool({
+    description: "Build STON.fi pTON payload bodies.",
+    inputSchema: z21.object({
+      proxyTonAddress: addressSchema,
+      request: ptonBodyActionSchema
+    }),
+    execute: async ({ proxyTonAddress, request }) => {
+      getRpcTonClient(stonfi);
+      const normalizedProxyTonAddress = normalizeTonAddress(
+        proxyTonAddress,
+        "proxyTonAddress"
+      );
+      const pton = createPton(normalizedProxyTonAddress);
+      switch (request.action) {
+        case "createTonTransferBody": {
+          const body = await pton.createTonTransferBody({
+            tonAmount: toAmountValue(request.params.tonAmount, "params.tonAmount"),
+            refundAddress: normalizeTonAddress(
+              request.params.refundAddress,
+              "params.refundAddress"
+            ),
+            forwardPayload: parseOptionalBocCell(
+              request.params.forwardPayload,
+              "params.forwardPayload"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            proxyTonAddress: normalizedProxyTonAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+        case "createDeployWalletBody": {
+          const body = await pton.createDeployWalletBody({
+            ownerAddress: normalizeTonAddress(
+              request.params.ownerAddress,
+              "params.ownerAddress"
+            ),
+            excessAddress: normalizeTonAddress(
+              request.params.excessAddress,
+              "params.excessAddress"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            proxyTonAddress: normalizedProxyTonAddress,
+            action: request.action,
+            body: summarizeCell(body, true)
+          });
+        }
+      }
+    }
+  }),
+  tonStonfiDexBuildPtonTx: jsonSafeTool({
+    description: "Build unsigned STON.fi pTON transactions.",
+    inputSchema: z21.object({
+      proxyTonAddress: addressSchema,
+      request: ptonTxActionSchema
+    }),
+    execute: async ({ proxyTonAddress, request }) => {
+      const tonClient = getRpcTonClient(stonfi);
+      const normalizedProxyTonAddress = normalizeTonAddress(
+        proxyTonAddress,
+        "proxyTonAddress"
+      );
+      const pton = createPton(normalizedProxyTonAddress);
+      const provider = getProviderForContract(
+        tonClient,
+        normalizedProxyTonAddress,
+        "proxyTonAddress"
+      );
+      switch (request.action) {
+        case "getTonTransferTxParams": {
+          const txParams = await pton.getTonTransferTxParams(provider, {
+            tonAmount: toAmountValue(request.params.tonAmount, "params.tonAmount"),
+            destinationAddress: normalizeTonAddress(
+              request.params.destinationAddress,
+              "params.destinationAddress"
+            ),
+            destinationWalletAddress: normalizeOptionalTonAddress(
+              request.params.destinationWalletAddress,
+              "params.destinationWalletAddress"
+            ),
+            refundAddress: normalizeTonAddress(
+              request.params.refundAddress,
+              "params.refundAddress"
+            ),
+            forwardPayload: parseOptionalBocCell(
+              request.params.forwardPayload,
+              "params.forwardPayload"
+            ),
+            forwardTonAmount: toAmountValueOptional(
+              request.params.forwardTonAmount,
+              "params.forwardTonAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            proxyTonAddress: normalizedProxyTonAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+        case "getDeployWalletTxParams": {
+          const txParams = await pton.getDeployWalletTxParams(provider, {
+            ownerAddress: normalizeTonAddress(
+              request.params.ownerAddress,
+              "params.ownerAddress"
+            ),
+            excessAddress: normalizeTonAddress(
+              request.params.excessAddress,
+              "params.excessAddress"
+            ),
+            gasAmount: toAmountValueOptional(
+              request.params.gasAmount,
+              "params.gasAmount"
+            ),
+            queryId: toQueryIdValue(request.params.queryId, "params.queryId")
+          });
+          return serializeStonfiValue({
+            dexVersion: "v2_2",
+            proxyTonAddress: normalizedProxyTonAddress,
+            action: request.action,
+            txParams: toSerializedTxParams(txParams)
+          });
+        }
+      }
+    }
+  })
+});
+
+// src/ton-tools/domains/stonfi-omniston.ts
+import {
+  Blockchain,
+  GaslessSettlement,
+  Omniston,
+  SettlementMethod
+} from "@ston-fi/omniston-sdk";
+import { z as z22 } from "zod";
+var omnistonAddressObjectSchema = z22.object({
+  blockchain: z22.number().int(),
+  address: z22.string().min(1)
+});
+var omnistonAddressInputSchema = z22.union([
+  addressSchema.describe(
+    "TON address shorthand. Will be converted into Omniston address with TON blockchain code."
+  ),
+  omnistonAddressObjectSchema.describe("Omniston address object.")
+]);
+var settlementMethodSchema = z22.enum([
+  SettlementMethod.SETTLEMENT_METHOD_SWAP,
+  SettlementMethod.SETTLEMENT_METHOD_ESCROW,
+  SettlementMethod.SETTLEMENT_METHOD_HTLC
+]);
+var gaslessSettlementSchema = z22.enum([
+  GaslessSettlement.GASLESS_SETTLEMENT_PROHIBITED,
+  GaslessSettlement.GASLESS_SETTLEMENT_POSSIBLE,
+  GaslessSettlement.GASLESS_SETTLEMENT_REQUIRED
+]);
+var quoteAmountSchema = z22.object({
+  bidUnits: z22.union([z22.string().min(1), z22.number().int()]).optional().describe("Input amount in bid asset units."),
+  askUnits: z22.union([z22.string().min(1), z22.number().int()]).optional().describe("Target amount in ask asset units.")
+}).refine((value) => value.bidUnits !== void 0 || value.askUnits !== void 0, {
+  message: "Provide at least one of bidUnits or askUnits."
+});
+var requestSettlementParamsSchema = z22.object({
+  maxPriceSlippageBps: z22.number().int().positive().optional(),
+  maxOutgoingMessages: z22.number().int().positive().optional(),
+  gaslessSettlement: gaslessSettlementSchema,
+  flexibleReferrerFee: z22.boolean().optional()
+});
+var quoteRequestInputSchema = z22.object({
+  bidAssetAddress: omnistonAddressInputSchema.optional(),
+  askAssetAddress: omnistonAddressInputSchema.optional(),
+  amount: quoteAmountSchema,
+  settlementMethods: z22.array(settlementMethodSchema).min(1),
+  referrerAddress: omnistonAddressInputSchema.optional(),
+  referrerFeeBps: z22.number().int().min(0).max(1e4).optional(),
+  settlementParams: requestSettlementParamsSchema.optional()
+});
+var timeoutMsSchema = z22.number().int().min(250).max(12e4).default(12e3).describe("Maximum snapshot collection duration in milliseconds.");
+var maxEventsSchema = z22.number().int().min(1).max(500).default(24).describe("Maximum number of events to capture from stream.");
+var normalizeOmnistonAddress = (value, label) => {
+  if (typeof value === "string") {
+    return {
+      blockchain: Blockchain.TON,
+      address: normalizeTonAddress(value, label)
+    };
+  }
+  const address = value.address.trim();
+  if (address.length === 0) {
+    throw new Error(`${label}.address must not be empty.`);
+  }
+  if (value.blockchain === Blockchain.TON) {
+    return {
+      blockchain: value.blockchain,
+      address: normalizeTonAddress(address, `${label}.address`)
+    };
+  }
+  return {
+    blockchain: value.blockchain,
+    address
+  };
+};
+var normalizeOptionalOmnistonAddress = (value, label) => value ? normalizeOmnistonAddress(value, label) : void 0;
+var normalizeQuoteRequest = (request) => {
+  const normalizedAmount = {
+    bidUnits: request.amount.bidUnits === void 0 ? void 0 : toAmountValue(request.amount.bidUnits, "request.amount.bidUnits"),
+    askUnits: request.amount.askUnits === void 0 ? void 0 : toAmountValue(request.amount.askUnits, "request.amount.askUnits")
+  };
+  return {
+    amount: normalizedAmount,
+    settlementMethods: request.settlementMethods,
+    bidAssetAddress: normalizeOptionalOmnistonAddress(
+      request.bidAssetAddress,
+      "request.bidAssetAddress"
+    ),
+    askAssetAddress: normalizeOptionalOmnistonAddress(
+      request.askAssetAddress,
+      "request.askAssetAddress"
+    ),
+    referrerAddress: normalizeOptionalOmnistonAddress(
+      request.referrerAddress,
+      "request.referrerAddress"
+    ),
+    referrerFeeBps: request.referrerFeeBps,
+    settlementParams: request.settlementParams ? {
+      maxPriceSlippageBps: request.settlementParams.maxPriceSlippageBps,
+      maxOutgoingMessages: request.settlementParams.maxOutgoingMessages,
+      gaslessSettlement: request.settlementParams.gaslessSettlement,
+      flexibleReferrerFee: request.settlementParams.flexibleReferrerFee
+    } : void 0
+  };
+};
+var normalizeTransferQuoteInput = (quote) => {
+  if (!quote || typeof quote !== "object" || Array.isArray(quote)) {
+    throw new Error(
+      "request.quote must be a quote object from tonStonfiOmnistonRequestQuotes."
+    );
+  }
+  const normalized = { ...quote };
+  if ("bidAssetAddress" in normalized && normalized.bidAssetAddress) {
+    normalized.bidAssetAddress = normalizeOmnistonAddress(
+      normalized.bidAssetAddress,
+      "request.quote.bidAssetAddress"
+    );
+  }
+  if ("askAssetAddress" in normalized && normalized.askAssetAddress) {
+    normalized.askAssetAddress = normalizeOmnistonAddress(
+      normalized.askAssetAddress,
+      "request.quote.askAssetAddress"
+    );
+  }
+  if ("referrerAddress" in normalized && normalized.referrerAddress) {
+    normalized.referrerAddress = normalizeOmnistonAddress(
+      normalized.referrerAddress,
+      "request.quote.referrerAddress"
+    );
+  }
+  return normalized;
+};
+var resolveOmnistonApiUrlOrThrow = (stonfi) => {
+  const apiUrl = stonfi.getOmnistonApiUrl();
+  let parsed;
+  try {
+    parsed = new URL(apiUrl);
+  } catch {
+    throw new Error(
+      `STON.fi Omniston API URL is invalid: "${apiUrl}". Set TonToolsOptions.stonfiOmnistonApiUrl or STONFI_OMNISTON_API_URL to a valid ws/wss URL.`
+    );
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw new Error(
+      `STON.fi Omniston API URL must use ws:// or wss://, received "${parsed.protocol}".`
+    );
+  }
+  return parsed.toString();
+};
+var withOmniston = async (stonfi, callback) => {
+  const apiUrl = resolveOmnistonApiUrlOrThrow(stonfi);
+  const omniston = new Omniston({ apiUrl });
+  try {
+    return await callback(omniston, apiUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/connection|connect|websocket|socket|closed|close|ECONN|ENOTFOUND|timed out|timeout/i.test(
+      message
+    )) {
+      throw new Error(`Unable to reach STON.fi Omniston at ${apiUrl}: ${message}`);
+    }
+    throw error;
+  } finally {
+    omniston.close();
+  }
+};
+var collectObservableSnapshot = (stream, timeoutMs, maxEvents) => new Promise((resolve) => {
+  const events = [];
+  let settled = false;
+  let subscription;
+  const settle = (reason, didComplete, error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    subscription?.unsubscribe();
+    resolve({
+      events,
+      reason,
+      didComplete,
+      error: error ? serializeStonfiValue(error) : null
+    });
+  };
+  const timeout = setTimeout(() => {
+    settle("timeout", false);
+  }, timeoutMs);
+  subscription = stream.subscribe({
+    next: (value) => {
+      events.push(value);
+      if (events.length >= maxEvents) {
+        settle("maxEvents", false);
+      }
+    },
+    error: (error) => {
+      settle("error", false, error);
+    },
+    complete: () => {
+      settle("completed", true);
+    }
+  });
+});
+var compareQuotesByRate = (left, right) => {
+  try {
+    const leftScaled = BigInt(left.askUnits) * BigInt(right.bidUnits);
+    const rightScaled = BigInt(right.askUnits) * BigInt(left.bidUnits);
+    if (leftScaled > rightScaled) return 1;
+    if (leftScaled < rightScaled) return -1;
+  } catch {
+    const askCompare = left.askUnits.localeCompare(right.askUnits, void 0, {
+      numeric: true
+    });
+    if (askCompare !== 0) return askCompare;
+    const bidCompare = right.bidUnits.localeCompare(left.bidUnits, void 0, {
+      numeric: true
+    });
+    if (bidCompare !== 0) return bidCompare;
+  }
+  return 0;
+};
+var getTradeStatusStage = (status) => {
+  const oneOf = status.status;
+  if (!oneOf) return "unknown";
+  if (oneOf.awaitingTransfer) return "awaitingTransfer";
+  if (oneOf.transferring) return "transferring";
+  if (oneOf.swapping) return "swapping";
+  if (oneOf.awaitingFill) return "awaitingFill";
+  if (oneOf.claimAvailable) return "claimAvailable";
+  if (oneOf.refundAvailable) return "refundAvailable";
+  if (oneOf.receivingFunds) return "receivingFunds";
+  if (oneOf.tradeSettled) return "tradeSettled";
+  if (oneOf.keepAlive) return "keepAlive";
+  if (oneOf.unsubscribed) return "unsubscribed";
+  return "unknown";
+};
+var isTerminalTradeStage = (stage) => stage === "tradeSettled" || stage === "unsubscribed";
+var createStonfiOmnistonTools = ({ stonfi }) => ({
+  tonStonfiOmnistonRequestQuotes: jsonSafeTool({
+    description: "Request Omniston quotes and return a bounded snapshot of quote stream events.",
+    inputSchema: z22.object({
+      request: quoteRequestInputSchema,
+      timeoutMs: timeoutMsSchema,
+      maxEvents: maxEventsSchema
+    }),
+    execute: async ({ request, timeoutMs, maxEvents }) => withOmniston(stonfi, async (omniston, apiUrl) => {
+      const normalizedRequest = normalizeQuoteRequest(request);
+      const snapshot = await collectObservableSnapshot(
+        omniston.requestForQuote(normalizedRequest),
+        timeoutMs,
+        maxEvents
+      );
+      const quoteUpdatedEvents = snapshot.events.filter(
+        (event) => event.type === "quoteUpdated"
+      );
+      const latestQuoteEvent = quoteUpdatedEvents.length === 0 ? null : quoteUpdatedEvents[quoteUpdatedEvents.length - 1];
+      const bestQuoteEvent = quoteUpdatedEvents.length === 0 ? null : quoteUpdatedEvents.reduce(
+        (best, current) => compareQuotesByRate(current.quote, best.quote) > 0 ? current : best
+      );
+      const latestEvent = snapshot.events.length === 0 ? null : snapshot.events[snapshot.events.length - 1];
+      return serializeStonfiValue({
+        apiUrl,
+        request: normalizedRequest,
+        snapshot: {
+          timeoutMs,
+          maxEvents,
+          reason: snapshot.reason,
+          didComplete: snapshot.didComplete,
+          eventCount: snapshot.events.length,
+          error: snapshot.error
+        },
+        latestQuote: latestQuoteEvent?.quote ?? null,
+        bestQuote: bestQuoteEvent?.quote ?? null,
+        latestEvent,
+        events: snapshot.events
+      });
+    })
+  }),
+  tonStonfiOmnistonBuildTransfer: jsonSafeTool({
+    description: "Build an unsigned Omniston transfer transaction payload from a selected quote.",
+    inputSchema: z22.object({
+      request: z22.object({
+        sourceAddress: omnistonAddressInputSchema,
+        destinationAddress: omnistonAddressInputSchema,
+        gasExcessAddress: omnistonAddressInputSchema.optional(),
+        refundAddress: omnistonAddressInputSchema.optional(),
+        quote: z22.unknown().describe("Quote object, usually from tonStonfiOmnistonRequestQuotes."),
+        useRecommendedSlippage: z22.boolean().default(false)
+      })
+    }),
+    execute: async ({ request }) => withOmniston(stonfi, async (omniston, apiUrl) => {
+      const buildRequest = {
+        sourceAddress: normalizeOmnistonAddress(
+          request.sourceAddress,
+          "request.sourceAddress"
+        ),
+        destinationAddress: normalizeOmnistonAddress(
+          request.destinationAddress,
+          "request.destinationAddress"
+        ),
+        gasExcessAddress: normalizeOptionalOmnistonAddress(
+          request.gasExcessAddress,
+          "request.gasExcessAddress"
+        ),
+        refundAddress: normalizeOptionalOmnistonAddress(
+          request.refundAddress,
+          "request.refundAddress"
+        ),
+        quote: normalizeTransferQuoteInput(request.quote),
+        useRecommendedSlippage: request.useRecommendedSlippage
+      };
+      const transaction = await omniston.buildTransfer(buildRequest);
+      return serializeStonfiValue({
+        apiUrl,
+        request: buildRequest,
+        transaction
+      });
+    })
+  }),
+  tonStonfiOmnistonBuildWithdrawal: jsonSafeTool({
+    description: "Build an unsigned Omniston withdrawal transaction payload.",
+    inputSchema: z22.object({
+      request: z22.object({
+        sourceAddress: omnistonAddressInputSchema,
+        quoteId: z22.string().min(1),
+        gasExcessAddress: omnistonAddressInputSchema.optional()
+      })
+    }),
+    execute: async ({ request }) => withOmniston(stonfi, async (omniston, apiUrl) => {
+      const buildRequest = {
+        sourceAddress: normalizeOmnistonAddress(
+          request.sourceAddress,
+          "request.sourceAddress"
+        ),
+        quoteId: request.quoteId,
+        gasExcessAddress: normalizeOptionalOmnistonAddress(
+          request.gasExcessAddress,
+          "request.gasExcessAddress"
+        )
+      };
+      const transaction = await omniston.buildWithdrawal(buildRequest);
+      return serializeStonfiValue({
+        apiUrl,
+        request: buildRequest,
+        transaction
+      });
+    })
+  }),
+  tonStonfiOmnistonTrackTrade: jsonSafeTool({
+    description: "Track Omniston trade status stream and return a bounded snapshot of statuses.",
+    inputSchema: z22.object({
+      request: z22.object({
+        quoteId: z22.string().min(1),
+        traderWalletAddress: omnistonAddressInputSchema,
+        outgoingTxHash: z22.string().min(1)
+      }),
+      timeoutMs: timeoutMsSchema,
+      maxEvents: maxEventsSchema
+    }),
+    execute: async ({ request, timeoutMs, maxEvents }) => withOmniston(stonfi, async (omniston, apiUrl) => {
+      const normalizedRequest = {
+        quoteId: request.quoteId,
+        traderWalletAddress: normalizeOmnistonAddress(
+          request.traderWalletAddress,
+          "request.traderWalletAddress"
+        ),
+        outgoingTxHash: request.outgoingTxHash
+      };
+      const snapshot = await collectObservableSnapshot(
+        omniston.trackTrade(normalizedRequest),
+        timeoutMs,
+        maxEvents
+      );
+      const statusEvents = snapshot.events.map((status) => ({
+        stage: getTradeStatusStage(status),
+        status
+      }));
+      const latest = statusEvents.length === 0 ? null : statusEvents[statusEvents.length - 1];
+      const terminal = statusEvents.length === 0 ? null : [...statusEvents].reverse().find((event) => isTerminalTradeStage(event.stage)) ?? null;
+      return serializeStonfiValue({
+        apiUrl,
+        request: normalizedRequest,
+        snapshot: {
+          timeoutMs,
+          maxEvents,
+          reason: snapshot.reason,
+          didComplete: snapshot.didComplete,
+          eventCount: snapshot.events.length,
+          error: snapshot.error
+        },
+        latestStatus: latest,
+        terminalStatus: terminal,
+        events: statusEvents
+      });
+    })
+  }),
+  tonStonfiOmnistonEscrowList: jsonSafeTool({
+    description: "List Omniston escrow orders for a trader wallet.",
+    inputSchema: z22.object({
+      request: z22.object({
+        traderWalletAddress: omnistonAddressInputSchema
+      })
+    }),
+    execute: async ({ request }) => withOmniston(stonfi, async (omniston, apiUrl) => {
+      const listRequest = {
+        traderWalletAddress: normalizeOmnistonAddress(
+          request.traderWalletAddress,
+          "request.traderWalletAddress"
+        )
+      };
+      const escrowOrders = await omniston.escrowList(listRequest);
+      return serializeStonfiValue({
+        apiUrl,
+        request: listRequest,
+        escrowOrders
+      });
+    })
+  })
+});
+
+// src/ton-tools.ts
+var createToolsFromClient = (toolOptions) => ({
+  ...createAccountTools(toolOptions),
+  ...createJettonTools(toolOptions),
+  ...createNftTools(toolOptions),
+  ...createDnsTools(toolOptions),
+  ...createRatesTools(toolOptions),
+  ...createTonConnectTools(toolOptions),
+  ...createWalletTools(toolOptions),
+  ...createStakingTools(toolOptions),
+  ...createStorageTools(toolOptions),
+  ...createTraceTools(toolOptions),
+  ...createEventTools(toolOptions),
+  ...createInscriptionsTools(toolOptions),
+  ...createEmulationTools(toolOptions),
+  ...createExtraCurrencyTools(toolOptions),
+  ...createMultisigTools(toolOptions),
+  ...createBlockchainTools(toolOptions),
+  ...createUtilityTools(toolOptions),
+  ...createWriteTools(toolOptions),
+  ...createStonfiDexTools(toolOptions),
+  ...createStonfiOmnistonTools(toolOptions)
+});
+var createTonTools = (options = {}) => createToolsFromClient({
+  client: createClient(options),
+  stonfi: createStonfiRuntime(options)
+});
 export {
   createTonTools
 };

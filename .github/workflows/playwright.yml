@@ -51,7 +51,10 @@ jobs:
 
       - name: Run Playwright tests
         working-directory: examples/chatbot
-        run: pnpm test
+        timeout-minutes: 20
+        env:
+          CI_PLAYWRIGHT: "1"
+        run: pnpm exec playwright test --max-failures=5
 
       - uses: actions/upload-artifact@v4
         if: always() && !cancelled()

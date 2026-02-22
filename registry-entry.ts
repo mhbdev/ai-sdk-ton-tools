@@ -1,8 +1,8 @@
 export const tonToolRegistryEntry = {
   slug: 'ton',
-  name: 'TON Tools (TonAPI)',
+  name: 'TON Tools (TonAPI + STON.fi)',
   description:
-    'TON blockchain tools for the AI SDK using TonAPI. Query chain data and perform write-capable workflows like signing payloads, building/sending external messages, and generating wallet mnemonics.',
+    'TON blockchain tools for the AI SDK using TonAPI plus STON.fi DEX/Omniston capabilities. Query chain data, build unsigned STON.fi swap/liquidity/vault transactions, and run write-capable local workflows like signing payloads and building external messages.',
   packageName: '@mhbdev/ai-sdk-ton-tools',
   tags: ['blockchain', 'ton', 'web3'],
   apiKeyEnvName: 'TONAPI_API_KEY',

@@ -1,6 +1,6 @@
 # AI SDK TON Tools
 
-TON blockchain tools for the Vercel AI SDK, powered by TonAPI.
+TON blockchain tools for the Vercel AI SDK, powered by TonAPI + STON.fi SDKs.
 
 ## Installation
 
@@ -16,6 +16,14 @@ Set your API key:
 
 ```bash
 TONAPI_API_KEY=your_api_key_here
+```
+
+Optional STON.fi settings (required for STON.fi DEX tools):
+
+```bash
+TON_RPC_ENDPOINT=https://ton-rpc.example.com/jsonRPC
+TON_RPC_API_KEY=your_ton_rpc_key
+STONFI_OMNISTON_API_URL=wss://omni-ws.ston.fi
 ```
 
 ## Usage
@@ -137,6 +145,32 @@ Write, Signing & Wallet Generation
 - `tonBuildExternalMessageBoc`, `tonSendBlockchainMessage`
 - `tonSendBlockchainMessageBatch`, `tonBuildAndSendExternalMessage`
 
+STON.fi DEX (v2_2, unsigned/read capability tools)
+
+- `tonStonfiDexGetRouterData`
+- `tonStonfiDexResolveAddresses`
+- `tonStonfiDexGetPoolData`
+- `tonStonfiDexGetLpAccountData`
+- `tonStonfiDexGetVaultData`
+- `tonStonfiDexBuildRouterBody`
+- `tonStonfiDexBuildRouterTx`
+- `tonStonfiDexBuildPoolBody`
+- `tonStonfiDexBuildPoolTx`
+- `tonStonfiDexBuildLpAccountBody`
+- `tonStonfiDexBuildLpAccountTx`
+- `tonStonfiDexBuildVaultBody`
+- `tonStonfiDexBuildVaultTx`
+- `tonStonfiDexBuildPtonBody`
+- `tonStonfiDexBuildPtonTx`
+
+STON.fi Omniston (bounded snapshots + unsigned builders)
+
+- `tonStonfiOmnistonRequestQuotes`
+- `tonStonfiOmnistonBuildTransfer`
+- `tonStonfiOmnistonBuildWithdrawal`
+- `tonStonfiOmnistonTrackTrade`
+- `tonStonfiOmnistonEscrowList`
+
 ## Options
 
 ```ts
@@ -144,12 +178,23 @@ type TonToolsOptions = {
   apiKey?: string;
   baseUrl?: string;
   network?: "mainnet" | "testnet";
+  stonfiRpcEndpoint?: string;
+  stonfiRpcApiKey?: string;
+  stonfiOmnistonApiUrl?: string;
 };
 ```
 
 - `apiKey` defaults to `process.env.TONAPI_API_KEY`
 - `network` controls the default base URL (`mainnet` or `testnet`)
 - `baseUrl` overrides `network` if provided
+- `stonfiRpcEndpoint` defaults to `process.env.TON_RPC_ENDPOINT` and is required by STON.fi DEX tools
+- `stonfiRpcApiKey` defaults to `process.env.TON_RPC_API_KEY`
+- `stonfiOmnistonApiUrl` defaults to `process.env.STONFI_OMNISTON_API_URL` and falls back to `wss://omni-ws.ston.fi`
+
+## STON.fi Write Behavior
+
+STON.fi tools intentionally expose read operations plus unsigned body/transaction preparation only.
+`send*` contract methods are not exposed; signing/sending stays under your app or wallet flow.
 
 ## License
 

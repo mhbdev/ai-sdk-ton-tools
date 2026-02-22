@@ -16,3 +16,5 @@ export { createInscriptionsTools } from "./inscriptions";
 export { createExtraCurrencyTools } from "./extra-currency";
 export { createMultisigTools } from "./multisig";
 export { createWriteTools } from "./write";
+export { createStonfiDexTools } from "./stonfi-dex";
+export { createStonfiOmnistonTools } from "./stonfi-omniston";

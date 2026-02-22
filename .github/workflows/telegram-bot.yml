@@ -1,0 +1,43 @@
+name: Telegram Bot CI
+
+on:
+  push:
+    paths:
+      - "examples/telegram-bot/**"
+      - ".github/workflows/telegram-bot.yml"
+  pull_request:
+    paths:
+      - "examples/telegram-bot/**"
+      - ".github/workflows/telegram-bot.yml"
+
+jobs:
+  telegram-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: examples/telegram-bot/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: examples/telegram-bot
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        working-directory: examples/telegram-bot
+        run: pnpm typecheck
+
+      - name: Test
+        working-directory: examples/telegram-bot
+        run: pnpm test
+

@@ -6,6 +6,9 @@ type TonToolsOptions = {
     apiKey?: string;
     baseUrl?: string;
     network?: "mainnet" | "testnet";
+    stonfiRpcEndpoint?: string;
+    stonfiRpcApiKey?: string;
+    stonfiOmnistonApiUrl?: string;
 };
 
 type CellTreeNode = {
@@ -20,6 +23,485 @@ type CellTreeNode = {
 };
 
 declare const createTonTools: (options?: TonToolsOptions) => {
+    tonStonfiOmnistonRequestQuotes: ai.Tool<{
+        request: {
+            amount: {
+                bidUnits?: string | number | undefined;
+                askUnits?: string | number | undefined;
+            };
+            settlementMethods: ("SETTLEMENT_METHOD_SWAP" | "SETTLEMENT_METHOD_ESCROW" | "SETTLEMENT_METHOD_HTLC")[];
+            bidAssetAddress?: string | {
+                blockchain: number;
+                address: string;
+            } | undefined;
+            askAssetAddress?: string | {
+                blockchain: number;
+                address: string;
+            } | undefined;
+            referrerAddress?: string | {
+                blockchain: number;
+                address: string;
+            } | undefined;
+            referrerFeeBps?: number | undefined;
+            settlementParams?: {
+                gaslessSettlement: "GASLESS_SETTLEMENT_PROHIBITED" | "GASLESS_SETTLEMENT_POSSIBLE" | "GASLESS_SETTLEMENT_REQUIRED";
+                maxPriceSlippageBps?: number | undefined;
+                maxOutgoingMessages?: number | undefined;
+                flexibleReferrerFee?: boolean | undefined;
+            } | undefined;
+        };
+        timeoutMs: number;
+        maxEvents: number;
+    }, unknown>;
+    tonStonfiOmnistonBuildTransfer: ai.Tool<{
+        request: {
+            sourceAddress: string | {
+                blockchain: number;
+                address: string;
+            };
+            destinationAddress: string | {
+                blockchain: number;
+                address: string;
+            };
+            quote: unknown;
+            useRecommendedSlippage: boolean;
+            gasExcessAddress?: string | {
+                blockchain: number;
+                address: string;
+            } | undefined;
+            refundAddress?: string | {
+                blockchain: number;
+                address: string;
+            } | undefined;
+        };
+    }, unknown>;
+    tonStonfiOmnistonBuildWithdrawal: ai.Tool<{
+        request: {
+            sourceAddress: string | {
+                blockchain: number;
+                address: string;
+            };
+            quoteId: string;
+            gasExcessAddress?: string | {
+                blockchain: number;
+                address: string;
+            } | undefined;
+        };
+    }, unknown>;
+    tonStonfiOmnistonTrackTrade: ai.Tool<{
+        request: {
+            quoteId: string;
+            traderWalletAddress: string | {
+                blockchain: number;
+                address: string;
+            };
+            outgoingTxHash: string;
+        };
+        timeoutMs: number;
+        maxEvents: number;
+    }, unknown>;
+    tonStonfiOmnistonEscrowList: ai.Tool<{
+        request: {
+            traderWalletAddress: string | {
+                blockchain: number;
+                address: string;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexGetRouterData: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        routerAddress: string;
+    }, unknown>;
+    tonStonfiDexResolveAddresses: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        routerAddress: string;
+        includePoolData: boolean;
+        includeVaultData: boolean;
+        token0Address?: string | undefined;
+        token1Address?: string | undefined;
+        userAddress?: string | undefined;
+        tokenWalletAddress?: string | undefined;
+        tokenMinterAddress?: string | undefined;
+    }, unknown>;
+    tonStonfiDexGetPoolData: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        poolAddress: string;
+        includeLpAccountData: boolean;
+        includeJettonWalletData: boolean;
+        ownerAddress?: string | undefined;
+        jettonWalletOwnerAddress?: string | undefined;
+    }, unknown>;
+    tonStonfiDexGetLpAccountData: ai.Tool<{
+        lpAccountAddress: string;
+    }, unknown>;
+    tonStonfiDexGetVaultData: ai.Tool<{
+        vaultAddress: string;
+    }, unknown>;
+    tonStonfiDexBuildRouterBody: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        routerAddress: string;
+        request: {
+            action: "createSwapBody";
+            params: {
+                askJettonWalletAddress: string;
+                receiverAddress: string;
+                minAskAmount: string | number;
+                refundAddress: string;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                refundPayload?: string | undefined;
+                refundForwardGasAmount?: string | number | undefined;
+                referralAddress?: string | undefined;
+                referralValue?: string | number | undefined;
+                deadline?: number | undefined;
+            };
+        } | {
+            action: "createCrossSwapBody";
+            params: {
+                askJettonWalletAddress: string;
+                receiverAddress: string;
+                minAskAmount: string | number;
+                refundAddress: string;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                refundPayload?: string | undefined;
+                refundForwardGasAmount?: string | number | undefined;
+                referralAddress?: string | undefined;
+                referralValue?: string | number | undefined;
+                deadline?: number | undefined;
+            };
+        } | {
+            action: "createProvideLiquidityBody";
+            params: {
+                routerWalletAddress: string;
+                minLpOut: string | number;
+                receiverAddress: string;
+                refundAddress: string;
+                bothPositive: boolean;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildRouterTx: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        routerAddress: string;
+        request: {
+            action: "getSwapJettonToJettonTxParams";
+            params: {
+                userWalletAddress: string;
+                offerJettonAddress: string;
+                askJettonAddress: string;
+                offerAmount: string | number;
+                minAskAmount: string | number;
+                receiverAddress?: string | undefined;
+                offerJettonWalletAddress?: string | undefined;
+                askJettonWalletAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                referralAddress?: string | undefined;
+                referralValue?: string | number | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                refundPayload?: string | undefined;
+                refundForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                gasAmount?: string | number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+                jettonCustomPayload?: string | undefined;
+                transferExcessAddress?: string | undefined;
+            };
+        } | {
+            action: "getSwapJettonToTonTxParams";
+            params: {
+                userWalletAddress: string;
+                offerJettonAddress: string;
+                proxyTonAddress: string;
+                offerAmount: string | number;
+                minAskAmount: string | number;
+                receiverAddress?: string | undefined;
+                offerJettonWalletAddress?: string | undefined;
+                askJettonWalletAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                referralAddress?: string | undefined;
+                referralValue?: string | number | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                refundPayload?: string | undefined;
+                refundForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                gasAmount?: string | number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+                jettonCustomPayload?: string | undefined;
+                transferExcessAddress?: string | undefined;
+            };
+        } | {
+            action: "getSwapTonToJettonTxParams";
+            params: {
+                userWalletAddress: string;
+                proxyTonAddress: string;
+                askJettonAddress: string;
+                offerAmount: string | number;
+                minAskAmount: string | number;
+                receiverAddress?: string | undefined;
+                offerJettonWalletAddress?: string | undefined;
+                askJettonWalletAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                referralAddress?: string | undefined;
+                referralValue?: string | number | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                refundPayload?: string | undefined;
+                refundForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "getProvideLiquidityJettonTxParams";
+            params: {
+                userWalletAddress: string;
+                sendTokenAddress: string;
+                otherTokenAddress: string;
+                sendAmount: string | number;
+                minLpOut: string | number;
+                receiverAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                gasAmount?: string | number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+                jettonCustomPayload?: string | undefined;
+                transferExcessAddress?: string | undefined;
+            };
+        } | {
+            action: "getSingleSideProvideLiquidityJettonTxParams";
+            params: {
+                userWalletAddress: string;
+                sendTokenAddress: string;
+                otherTokenAddress: string;
+                sendAmount: string | number;
+                minLpOut: string | number;
+                receiverAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                gasAmount?: string | number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+                jettonCustomPayload?: string | undefined;
+                transferExcessAddress?: string | undefined;
+            };
+        } | {
+            action: "getProvideLiquidityTonTxParams";
+            params: {
+                userWalletAddress: string;
+                proxyTonAddress: string;
+                otherTokenAddress: string;
+                sendAmount: string | number;
+                minLpOut: string | number;
+                receiverAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                bothPositive?: boolean | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "getSingleSideProvideLiquidityTonTxParams";
+            params: {
+                userWalletAddress: string;
+                proxyTonAddress: string;
+                otherTokenAddress: string;
+                sendAmount: string | number;
+                minLpOut: string | number;
+                receiverAddress?: string | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                bothPositive?: boolean | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                deadline?: number | undefined;
+                forwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildPoolBody: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        poolAddress: string;
+        request: {
+            action: "createCollectFeesBody";
+            params: {
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "createBurnBody";
+            params: {
+                amount: string | number;
+                dexCustomPayload?: string | undefined;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildPoolTx: ai.Tool<{
+        dexType: "constant_product" | "stableswap" | "weighted_const_product" | "weighted_stableswap";
+        poolAddress: string;
+        request: {
+            action: "getCollectFeeTxParams";
+            params: {
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "getBurnTxParams";
+            params: {
+                amount: string | number;
+                userWalletAddress: string;
+                dexCustomPayload?: string | undefined;
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildLpAccountBody: ai.Tool<{
+        lpAccountAddress: string;
+        request: {
+            action: "createRefundBody";
+            params: {
+                leftMaybePayload?: string | undefined;
+                rightMaybePayload?: string | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "createDirectAddLiquidityBody";
+            params: {
+                userWalletAddress: string;
+                amount0: string | number;
+                amount1: string | number;
+                minimumLpToMint?: string | number | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "createResetGasBody";
+            params: {
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildLpAccountTx: ai.Tool<{
+        lpAccountAddress: string;
+        request: {
+            action: "getRefundTxParams";
+            params: {
+                leftMaybePayload?: string | undefined;
+                rightMaybePayload?: string | undefined;
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "getDirectAddLiquidityTxParams";
+            params: {
+                userWalletAddress: string;
+                amount0: string | number;
+                amount1: string | number;
+                minimumLpToMint?: string | number | undefined;
+                refundAddress?: string | undefined;
+                excessesAddress?: string | undefined;
+                dexCustomPayload?: string | undefined;
+                dexCustomPayloadForwardGasAmount?: string | number | undefined;
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "getResetGasTxParams";
+            params: {
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildVaultBody: ai.Tool<{
+        vaultAddress: string;
+        request: {
+            action: "createWithdrawFeeBody";
+            params: {
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildVaultTx: ai.Tool<{
+        vaultAddress: string;
+        request: {
+            action: "getWithdrawFeeTxParams";
+            params: {
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildPtonBody: ai.Tool<{
+        proxyTonAddress: string;
+        request: {
+            action: "createTonTransferBody";
+            params: {
+                tonAmount: string | number;
+                refundAddress: string;
+                forwardPayload?: string | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "createDeployWalletBody";
+            params: {
+                ownerAddress: string;
+                excessAddress: string;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
+    tonStonfiDexBuildPtonTx: ai.Tool<{
+        proxyTonAddress: string;
+        request: {
+            action: "getTonTransferTxParams";
+            params: {
+                tonAmount: string | number;
+                destinationAddress: string;
+                refundAddress: string;
+                destinationWalletAddress?: string | undefined;
+                forwardPayload?: string | undefined;
+                forwardTonAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        } | {
+            action: "getDeployWalletTxParams";
+            params: {
+                ownerAddress: string;
+                excessAddress: string;
+                gasAmount?: string | number | undefined;
+                queryId?: string | number | undefined;
+            };
+        };
+    }, unknown>;
     tonBuildCellBoc: ai.Tool<{
         operations: ({
             type: "bit";

@@ -1,4 +1,4 @@
-import { createClient } from "./ton-tools/client";
+import { createClient, createStonfiRuntime } from "./ton-tools/client";
 import {
   createAccountTools,
   createBlockchainTools,
@@ -18,33 +18,40 @@ import {
   createUtilityTools,
   createWalletTools,
   createWriteTools,
+  createStonfiDexTools,
+  createStonfiOmnistonTools,
 } from "./ton-tools/domains";
-import type { TonToolsOptions } from "./ton-tools/types";
+import type { TonToolsOptions, ToolOptions } from "./ton-tools/types";
 
 export type { TonToolsOptions } from "./ton-tools/types";
 
-const createToolsFromClient = (client: ReturnType<typeof createClient>) => ({
-  ...createAccountTools({ client }),
-  ...createJettonTools({ client }),
-  ...createNftTools({ client }),
-  ...createDnsTools({ client }),
-  ...createRatesTools({ client }),
-  ...createTonConnectTools({ client }),
-  ...createWalletTools({ client }),
-  ...createStakingTools({ client }),
-  ...createStorageTools({ client }),
-  ...createTraceTools({ client }),
-  ...createEventTools({ client }),
-  ...createInscriptionsTools({ client }),
-  ...createEmulationTools({ client }),
-  ...createExtraCurrencyTools({ client }),
-  ...createMultisigTools({ client }),
-  ...createBlockchainTools({ client }),
-  ...createUtilityTools({ client }),
-  ...createWriteTools({ client }),
+const createToolsFromClient = (toolOptions: ToolOptions) => ({
+  ...createAccountTools(toolOptions),
+  ...createJettonTools(toolOptions),
+  ...createNftTools(toolOptions),
+  ...createDnsTools(toolOptions),
+  ...createRatesTools(toolOptions),
+  ...createTonConnectTools(toolOptions),
+  ...createWalletTools(toolOptions),
+  ...createStakingTools(toolOptions),
+  ...createStorageTools(toolOptions),
+  ...createTraceTools(toolOptions),
+  ...createEventTools(toolOptions),
+  ...createInscriptionsTools(toolOptions),
+  ...createEmulationTools(toolOptions),
+  ...createExtraCurrencyTools(toolOptions),
+  ...createMultisigTools(toolOptions),
+  ...createBlockchainTools(toolOptions),
+  ...createUtilityTools(toolOptions),
+  ...createWriteTools(toolOptions),
+  ...createStonfiDexTools(toolOptions),
+  ...createStonfiOmnistonTools(toolOptions),
 });
 
 export const createTonTools = (options: TonToolsOptions = {}) =>
-  createToolsFromClient(createClient(options));
+  createToolsFromClient({
+    client: createClient(options),
+    stonfi: createStonfiRuntime(options),
+  });
 
 export type TonToolset = ReturnType<typeof createTonTools>;

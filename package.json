@@ -1,6 +1,6 @@
 {
   "name": "@mhbdev/ai-sdk-ton-tools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TON blockchain tools for Vercel AI SDK.",
   "repository": {
     "type": "git",
@@ -43,8 +43,11 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@ston-fi/omniston-sdk": "^0.7.8",
+    "@ston-fi/sdk": "^2.7.0",
     "@ton-api/client": "^0.4.0",
     "@ton/core": "^0.62.0",
+    "@ton/ton": "^15.4.0",
     "@ton/crypto": "^3.3.0"
   },
   "peerDependencies": {

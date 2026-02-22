@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "docker-expert": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "e862a5e8dd5d7613622a3a40fc0ab6f642df500200fbc331da79ad7f063d1a3c"
+    },
     "telegram-bot-builder": {
       "source": "sickn33/antigravity-awesome-skills",
       "sourceType": "github",

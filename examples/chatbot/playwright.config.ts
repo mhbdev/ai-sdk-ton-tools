@@ -10,6 +10,8 @@ config({
   path: ".env.local",
 });
 
+const isCI = Boolean(process.env.CI);
+
 /* Use process.env.PORT by default and fallback to port 3000 */
 const PORT = process.env.PORT || 3000;
 
@@ -25,15 +27,17 @@ const baseURL = `http://localhost:${PORT}`;
 export default defineConfig({
   testDir: "./tests",
   /* Run tests in files in parallel */
-  fullyParallel: true,
+  fullyParallel: !isCI,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
-  forbidOnly: !!process.env.CI,
+  forbidOnly: isCI,
   /* Retry on CI only */
   retries: 0,
   /* Limit workers to prevent browser crashes */
-  workers: process.env.CI ? 2 : 2,
+  workers: isCI ? 1 : 2,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: "html",
+  reporter: isCI ? [["line"], ["html", { open: "never" }]] : "html",
+  /* Keep CI under GitHub Action timeout and fail with artifacts instead of hard-cancel */
+  globalTimeout: isCI ? 20 * 60 * 1000 : undefined,
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
@@ -41,12 +45,14 @@ export default defineConfig({
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: "retain-on-failure",
+    actionTimeout: isCI ? 15 * 1000 : undefined,
+    navigationTimeout: isCI ? 30 * 1000 : undefined,
   },
 
   /* Configure global timeout for each test */
-  timeout: 240 * 1000, // 120 seconds
+  timeout: isCI ? 90 * 1000 : 240 * 1000,
   expect: {
-    timeout: 240 * 1000,
+    timeout: isCI ? 15 * 1000 : 240 * 1000,
   },
 
   /* Configure projects */
@@ -92,9 +98,9 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: "pnpm dev",
+    command: `pnpm dev --port ${PORT}`,
     url: `${baseURL}/ping`,
-    timeout: 120 * 1000,
-    reuseExistingServer: !process.env.CI,
+    timeout: isCI ? 180 * 1000 : 120 * 1000,
+    reuseExistingServer: !isCI,
   },
 });

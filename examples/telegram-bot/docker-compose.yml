@@ -1,0 +1,295 @@
+name: telegram-ton-agent-bot
+
+x-bot-image: &bot-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: ${TELEGRAM_BOT_IMAGE:-telegram-ton-agent-bot:latest}
+
+x-bot-env: &bot-env
+  NODE_ENV: production
+  PORT: "8787"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  BOT_RUN_MODE: ${BOT_RUN_MODE:-webhook}
+  APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL is required}
+  TONCONNECT_MANIFEST_URL: ${TONCONNECT_MANIFEST_URL:?TONCONNECT_MANIFEST_URL is required}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required}
+  TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?TELEGRAM_WEBHOOK_SECRET is required}
+  BOT_ADMIN_TOKEN: ${BOT_ADMIN_TOKEN:?BOT_ADMIN_TOKEN is required}
+  TONAPI_API_KEY: ${TONAPI_API_KEY:?TONAPI_API_KEY is required}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+  AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:?AI_GATEWAY_API_KEY is required}
+  AI_MODEL: ${AI_MODEL:-openai/gpt-5.2}
+  AI_GATEWAY_FALLBACK_MODEL: ${AI_GATEWAY_FALLBACK_MODEL:-}
+  POSTGRES_URL: ${POSTGRES_URL:?POSTGRES_URL is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  KMS_KEY_ID: ${KMS_KEY_ID:?KMS_KEY_ID is required}
+  ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY is required}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  TSX_DISABLE_CACHE: "1"
+
+x-bot-common: &bot-common
+  <<: *bot-image
+  init: true
+  networks:
+    - internal
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  restart: unless-stopped
+
+services:
+  telegram-bot-migrate:
+    <<: *bot-common
+    command: ["pnpm", "db:migrate"]
+    environment:
+      <<: *bot-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  telegram-bot:
+    <<: *bot-common
+    environment:
+      <<: *bot-env
+      BOT_RUN_MODE: ${BOT_RUN_MODE:-webhook}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      telegram-bot-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${BOT_PORT:-8787}:8787"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/readyz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - edge
+      - internal
+
+  telegram-bot-polling:
+    <<: *bot-common
+    profiles: ["polling-fallback"]
+    environment:
+      <<: *bot-env
+      BOT_RUN_MODE: polling
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      telegram-bot-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  postgres:
+    image: postgres:16.8-bookworm
+    init: true
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-telegram_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-telegram_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: UTC
+    command:
+      [
+        "postgres",
+        "-c",
+        "max_connections=300",
+        "-c",
+        "shared_buffers=256MB",
+        "-c",
+        "wal_level=replica",
+        "-c",
+        "log_min_duration_statement=250ms",
+      ]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-bookworm
+    init: true
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      [
+        "sh",
+        "-ec",
+        "exec redis-server --appendonly yes --appendfsync everysec --save 900 1 --save 300 10 --save 60 10000 --maxmemory-policy noeviction --requirepass \"$${REDIS_PASSWORD}\"",
+      ]
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test:
+        ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.107.0
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks:
+      - internal
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    profiles: ["observability"]
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-telegram_bot}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER:-telegram_bot}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    profiles: ["observability"]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      otel-collector:
+        condition: service_started
+      postgres-exporter:
+        condition: service_started
+      redis-exporter:
+        condition: service_started
+    networks:
+      - edge
+      - internal
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - edge
+      - internal
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    restart: unless-stopped
+
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    profiles: ["backups"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-telegram_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-telegram_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      SCHEDULE: ${POSTGRES_BACKUP_SCHEDULE:-@daily}
+      BACKUP_KEEP_DAYS: ${POSTGRES_BACKUP_KEEP_DAYS:-14}
+      BACKUP_KEEP_WEEKS: ${POSTGRES_BACKUP_KEEP_WEEKS:-8}
+      BACKUP_KEEP_MONTHS: ${POSTGRES_BACKUP_KEEP_MONTHS:-12}
+      HEALTHCHECK_PORT: 8080
+    volumes:
+      - postgres-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  postgres-backups:
