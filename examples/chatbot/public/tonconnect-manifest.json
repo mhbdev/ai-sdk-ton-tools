@@ -1,5 +1,5 @@
 {
   "name": "TON AI Chatbot",
-  "url": "http://localhost:3000",
-  "iconUrl": "http://localhost:3000/images/demo-thumbnail.png"
+  "url": "https://ai-sdk-ton-tools.vercel.app",
+  "iconUrl": "https://ai-sdk-ton-tools.vercel.app/images/demo-thumbnail.png"
 }
