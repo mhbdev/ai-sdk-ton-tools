@@ -198,4 +198,6 @@ STON.fi tools intentionally expose read operations plus unsigned body/transactio
 
 ## License
 
-MIT
+- Library code in this repository (root package) is licensed under MIT (`LICENSE`).
+- `examples/chatbot/` is licensed under Apache-2.0 (`examples/chatbot/LICENSE`).
+- `examples/telegram-bot/` is licensed under Apache-2.0 (`examples/telegram-bot/LICENSE`).
