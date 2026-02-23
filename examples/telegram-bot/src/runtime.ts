@@ -6,7 +6,10 @@ import { GrammyError } from "grammy";
 import type { TelemetryHandle } from "@/observability/telemetry";
 import { getBot } from "@/telegram/bot";
 import { getEnv } from "@/config/env";
-import { assertDatabaseSchemaCompatibility } from "@/db/schema-compat";
+import {
+  assertDatabaseSchemaCompatibility,
+  repairDatabaseSchemaCompatibility,
+} from "@/db/schema-compat";
 import { getQueueHealth } from "@/queue/health";
 import {
   markProcessedUpdateStatus,
@@ -40,6 +43,12 @@ const RECEIVED_UPDATE_RECOVERY_BATCH_SIZE = 200;
 const TONCONNECT_ICON_DEFAULT_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAAR0lEQVR42u3PQQ0AIAzAMMC/5yFjRxMFPXp2zQAAAPBf1S0W2gV2mQkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4F8M6vQBAzQ2m0QAAAAASUVORK5CYII=";
 const TONCONNECT_ICON_PATH_SEGMENTS = ["public", "tonconnect-icon.png"] as const;
+const TONCONNECT_OPEN_ALLOWED_PROTOCOLS = new Set([
+  "tc:",
+  "ton:",
+  "tonkeeper:",
+  "tonhub:",
+]);
 
 const isTransientTelegramNetworkError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -105,8 +114,17 @@ const loadTonConnectIconPng = async () => {
   }
 };
 
+const escapeHtml = (input: string) =>
+  input
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+
 export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
   const env = getEnv();
+  await repairDatabaseSchemaCompatibility();
   await assertDatabaseSchemaCompatibility();
   const normalizedAppBaseUrl = env.APP_BASE_URL.endsWith("/")
     ? env.APP_BASE_URL
@@ -137,6 +155,72 @@ export const startRuntime = async ({ telemetry }: StartRuntimeArgs) => {
       : normalizedAppBaseUrl,
     iconUrl: tonConnectIconUrl,
   }));
+
+  app.get<{ Querystring: { target?: string } }>(
+    "/tonconnect/open",
+    async (request, reply) => {
+      const target = request.query.target;
+      if (typeof target !== "string" || target.length === 0) {
+        return reply.code(400).send({
+          ok: false,
+          error: "target query parameter is required",
+        });
+      }
+
+      let parsedTarget: URL;
+      try {
+        parsedTarget = new URL(target);
+      } catch {
+        return reply.code(400).send({
+          ok: false,
+          error: "target must be a valid URL",
+        });
+      }
+
+      if (!TONCONNECT_OPEN_ALLOWED_PROTOCOLS.has(parsedTarget.protocol)) {
+        return reply.code(400).send({
+          ok: false,
+          error: "target URL protocol is not allowed",
+        });
+      }
+
+      const safeTarget = parsedTarget.toString();
+      const escapedTarget = escapeHtml(safeTarget);
+      const html = [
+        "<!doctype html>",
+        "<html lang=\"en\">",
+        "<head>",
+        "<meta charset=\"utf-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "<title>Open Wallet</title>",
+        "<style>",
+        "body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#f7f8fb;color:#0f172a;}",
+        ".card{max-width:520px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;}",
+        "a.btn{display:inline-block;margin-top:12px;padding:10px 14px;border-radius:8px;background:#1d4ed8;color:#fff;text-decoration:none;font-weight:600;}",
+        "code{word-break:break-all;background:#f1f5f9;padding:2px 4px;border-radius:4px;}",
+        "</style>",
+        "</head>",
+        "<body>",
+        "<div class=\"card\">",
+        "<h1>Opening wallet app...</h1>",
+        "<p>If your wallet does not open automatically, tap the button below.</p>",
+        `<a class="btn" href="${escapedTarget}" rel="noopener noreferrer">Open Wallet App</a>`,
+        `<p style="margin-top:16px;font-size:13px;color:#475569;">Link: <code>${escapedTarget}</code></p>`,
+        "</div>",
+        "<script>",
+        `const target = ${JSON.stringify(safeTarget)};`,
+        "setTimeout(() => { window.location.href = target; }, 50);",
+        "</script>",
+        "</body>",
+        "</html>",
+      ].join("");
+
+      return reply
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(html);
+    },
+  );
 
   app.get("/healthz", async () => ({
     ok: true,

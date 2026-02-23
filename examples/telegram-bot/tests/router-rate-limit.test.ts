@@ -63,6 +63,7 @@ vi.mock("@/config/env", () => ({
     PERSONALIZATION_UX_ENABLED: true,
     MULTI_WALLET_ENABLED: true,
     APPROVAL_UX_V2_ENABLED: true,
+    APP_BASE_URL: "https://telechatbot.circulo.cloud",
   }),
 }));
 
@@ -319,5 +320,35 @@ describe("router rate-limit integration", () => {
     expect(firstButton?.text).toBe("Open Wallet App");
     expect(firstButton?.url).toBe(connectUrl);
     expect(mocks.sendTelegramText).not.toHaveBeenCalled();
+  });
+
+  it("wraps non-HTTP wallet URL schemes before building Telegram keyboard buttons", async () => {
+    const connectUrl = "tc://?v=2&id=session-test&r=%7B%22hello%22%3A%22world%22%7D";
+    mocks.getWalletConnectFlowStatus.mockResolvedValue({
+      status: "pending",
+      message: "Still waiting for wallet approval (590s remaining).",
+      connectUrl,
+    });
+
+    const result = await routeUpdate(createWalletStatusCallbackUpdate("session-1"));
+
+    expect(result.shouldQueueTurn).toBe(false);
+    expect(mocks.botSendMessage).toHaveBeenCalledTimes(1);
+    const call = mocks.botSendMessage.mock.calls[0];
+
+    const options = (call?.[2] ?? {}) as {
+      reply_markup?: {
+        inline_keyboard?: Array<Array<{ text?: string; url?: string; callback_data?: string }>>;
+      };
+    };
+    const firstButton = options.reply_markup?.inline_keyboard?.[0]?.[0];
+    const expectedWrappedUrl = new URL(
+      "tonconnect/open",
+      "https://telechatbot.circulo.cloud/",
+    );
+    expectedWrappedUrl.searchParams.set("target", connectUrl);
+
+    expect(firstButton?.text).toBe("Open Wallet App");
+    expect(firstButton?.url).toBe(expectedWrappedUrl.toString());
   });
 });

@@ -61,6 +61,7 @@ type SettingsScreen = "menu" | "style" | "risk" | "network" | "wallet";
 const APPROVAL_CONFIRMATION_TTL_SECONDS = 30;
 const SETTINGS_CALLBACK_RE = /^cfg:([^:]+):([^:]+):(.+)$/;
 const APPROVAL_CALLBACK_RE = /^ap:([^:]+):(approve|deny|details|refresh)$/;
+const TELEGRAM_INLINE_URL_ALLOWED_PROTOCOLS = new Set(["http:", "https:", "tg:"]);
 const NON_TURN_COMMANDS = new Set([
   "/start",
   "/settings",
@@ -149,6 +150,27 @@ const shortenAddress = (address: string) =>
     ? `${address.slice(0, 7)}...${address.slice(address.length - 7)}`
     : address;
 
+const toTelegramInlineUrl = (url: string) => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+
+  if (TELEGRAM_INLINE_URL_ALLOWED_PROTOCOLS.has(parsed.protocol)) {
+    return url;
+  }
+
+  const env = getEnv();
+  const appBaseUrl = env.APP_BASE_URL.endsWith("/")
+    ? env.APP_BASE_URL
+    : `${env.APP_BASE_URL}/`;
+  const wrapped = new URL("tonconnect/open", appBaseUrl);
+  wrapped.searchParams.set("target", url);
+  return wrapped.toString();
+};
+
 const sendTelegramKeyboardMessage = async (input: {
   telegramChatId: string;
   text: string;
@@ -202,8 +224,9 @@ const sendWalletConnectPrompt = async (input: {
   messageThreadId?: number;
   replyToMessageId?: number;
 }) => {
+  const walletOpenUrl = toTelegramInlineUrl(input.connectUrl);
   const keyboard = new InlineKeyboard()
-    .url("Open Wallet App", input.connectUrl)
+    .url("Open Wallet App", walletOpenUrl)
     .row()
     .text("Check Status", `wallet:status:${input.sessionId}`)
     .text("Cancel", `wallet:cancel:${input.sessionId}`);
@@ -242,8 +265,9 @@ const sendWalletConnectStatus = async (input: {
     typeof input.status.connectUrl === "string" &&
     input.status.connectUrl.length > 0
   ) {
+    const walletOpenUrl = toTelegramInlineUrl(input.status.connectUrl);
     const keyboard = new InlineKeyboard()
-      .url("Open Wallet App", input.status.connectUrl)
+      .url("Open Wallet App", walletOpenUrl)
       .row()
       .text("Check Status", `wallet:status:${input.sessionId}`)
       .text("Cancel", `wallet:cancel:${input.sessionId}`);

@@ -1,4 +1,5 @@
 import { sql } from "@/db/client";
+import { logger } from "@/observability/logger";
 
 type RequiredColumn = {
   tableName: string;
@@ -26,7 +27,85 @@ const REQUIRED_ENUMS = ["response_style", "risk_profile"] as const;
 
 const toKey = (input: RequiredColumn) => `${input.tableName}.${input.columnName}`;
 
-export const assertDatabaseSchemaCompatibility = async () => {
+const SCHEMA_COMPAT_REPAIR_SQL = `
+DO $$
+BEGIN
+  CREATE TYPE "public"."response_style" AS ENUM('concise', 'detailed');
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END
+$$;
+
+DO $$
+BEGIN
+  CREATE TYPE "public"."risk_profile" AS ENUM('cautious', 'balanced', 'advanced');
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END
+$$;
+
+ALTER TABLE "chat_sessions" ADD COLUMN IF NOT EXISTS "message_thread_id" integer;
+ALTER TABLE "telegram_chats" ADD COLUMN IF NOT EXISTS "response_style_override" "response_style";
+ALTER TABLE "telegram_chats" ADD COLUMN IF NOT EXISTS "risk_profile_override" "risk_profile";
+ALTER TABLE "telegram_users" ADD COLUMN IF NOT EXISTS "default_response_style" "response_style";
+ALTER TABLE "telegram_users" ADD COLUMN IF NOT EXISTS "default_risk_profile" "risk_profile";
+ALTER TABLE "telegram_users" ADD COLUMN IF NOT EXISTS "default_network" "ton_network";
+ALTER TABLE "telegram_users" ADD COLUMN IF NOT EXISTS "default_wallet_link_id" uuid;
+ALTER TABLE "tool_approvals" ADD COLUMN IF NOT EXISTS "callback_token" varchar(32);
+ALTER TABLE "tool_approvals" ADD COLUMN IF NOT EXISTS "telegram_chat_id" varchar(32);
+ALTER TABLE "tool_approvals" ADD COLUMN IF NOT EXISTS "message_thread_id" integer;
+ALTER TABLE "tool_approvals" ADD COLUMN IF NOT EXISTS "prompt_message_id" integer;
+ALTER TABLE "tool_approvals" ADD COLUMN IF NOT EXISTS "risk_profile" "risk_profile";
+ALTER TABLE "wallet_links" ADD COLUMN IF NOT EXISTS "label" varchar(64);
+ALTER TABLE "wallet_links" ADD COLUMN IF NOT EXISTS "is_default" boolean;
+
+UPDATE "telegram_users"
+SET "default_response_style" = 'concise'
+WHERE "default_response_style" IS NULL;
+UPDATE "telegram_users"
+SET "default_risk_profile" = 'balanced'
+WHERE "default_risk_profile" IS NULL;
+UPDATE "telegram_users"
+SET "default_network" = 'mainnet'
+WHERE "default_network" IS NULL;
+
+ALTER TABLE "telegram_users" ALTER COLUMN "default_response_style" SET DEFAULT 'concise';
+ALTER TABLE "telegram_users" ALTER COLUMN "default_response_style" SET NOT NULL;
+ALTER TABLE "telegram_users" ALTER COLUMN "default_risk_profile" SET DEFAULT 'balanced';
+ALTER TABLE "telegram_users" ALTER COLUMN "default_risk_profile" SET NOT NULL;
+ALTER TABLE "telegram_users" ALTER COLUMN "default_network" SET DEFAULT 'mainnet';
+ALTER TABLE "telegram_users" ALTER COLUMN "default_network" SET NOT NULL;
+
+UPDATE "tool_approvals"
+SET "callback_token" = substring(md5(random()::text || clock_timestamp()::text || "approval_id"), 1, 32)
+WHERE "callback_token" IS NULL;
+UPDATE "tool_approvals"
+SET "telegram_chat_id" = '0'
+WHERE "telegram_chat_id" IS NULL;
+UPDATE "tool_approvals"
+SET "risk_profile" = 'balanced'
+WHERE "risk_profile" IS NULL;
+
+ALTER TABLE "tool_approvals" ALTER COLUMN "callback_token" SET NOT NULL;
+ALTER TABLE "tool_approvals" ALTER COLUMN "telegram_chat_id" SET NOT NULL;
+ALTER TABLE "tool_approvals" ALTER COLUMN "risk_profile" SET DEFAULT 'balanced';
+ALTER TABLE "tool_approvals" ALTER COLUMN "risk_profile" SET NOT NULL;
+
+UPDATE "wallet_links"
+SET "is_default" = false
+WHERE "is_default" IS NULL;
+ALTER TABLE "wallet_links" ALTER COLUMN "is_default" SET DEFAULT false;
+ALTER TABLE "wallet_links" ALTER COLUMN "is_default" SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS "chat_sessions_chat_user_thread_idx"
+  ON "chat_sessions" USING btree ("telegram_chat_id","telegram_user_id","message_thread_id");
+CREATE INDEX IF NOT EXISTS "tool_approvals_callback_token_idx"
+  ON "tool_approvals" USING btree ("callback_token");
+CREATE INDEX IF NOT EXISTS "wallet_links_default_idx"
+  ON "wallet_links" USING btree ("telegram_user_id","is_default");
+`;
+
+const listMissingSchemaRequirements = async () => {
   const presentColumns = await sql<{ table_name: string; column_name: string }[]>`
     select table_name, column_name
     from information_schema.columns
@@ -66,27 +145,74 @@ export const assertDatabaseSchemaCompatibility = async () => {
     (enumName) => !presentEnumSet.has(enumName),
   );
 
-  if (missingColumns.length === 0 && missingEnums.length === 0) {
-    return;
-  }
+  return {
+    missingColumns,
+    missingEnums,
+  };
+};
 
+const formatSchemaCompatibilityError = (input: {
+  missingColumns: RequiredColumn[];
+  missingEnums: readonly string[];
+}) => {
   const parts: string[] = [];
-  if (missingColumns.length > 0) {
+  if (input.missingColumns.length > 0) {
     parts.push(
-      `Missing columns: ${missingColumns
+      `Missing columns: ${input.missingColumns
         .map((column) => `${column.tableName}.${column.columnName}`)
         .join(", ")}`,
     );
   }
-  if (missingEnums.length > 0) {
-    parts.push(`Missing enums: ${missingEnums.join(", ")}`);
+  if (input.missingEnums.length > 0) {
+    parts.push(`Missing enums: ${input.missingEnums.join(", ")}`);
+  }
+
+  return [
+    "Database schema is not compatible with this build.",
+    ...parts,
+    "Run DB migrations before starting workers (e.g. `pnpm db:migrate`).",
+  ].join(" ");
+};
+
+export const repairDatabaseSchemaCompatibility = async () => {
+  const missing = await listMissingSchemaRequirements();
+  if (missing.missingColumns.length === 0 && missing.missingEnums.length === 0) {
+    return false;
+  }
+
+  logger.warn("Database schema compatibility mismatch detected; applying repair.", {
+    missingColumns: missing.missingColumns.map((column) =>
+      `${column.tableName}.${column.columnName}`,
+    ),
+    missingEnums: missing.missingEnums,
+  });
+
+  await sql.unsafe(SCHEMA_COMPAT_REPAIR_SQL);
+
+  const remaining = await listMissingSchemaRequirements();
+  if (remaining.missingColumns.length === 0 && remaining.missingEnums.length === 0) {
+    logger.info("Database schema compatibility repair completed.");
+    return true;
   }
 
   throw new Error(
-    [
-      "Database schema is not compatible with this build.",
-      ...parts,
-      "Run DB migrations before starting workers (e.g. `node --import tsx src/db/migrate.ts`).",
-    ].join(" "),
+    formatSchemaCompatibilityError({
+      missingColumns: remaining.missingColumns,
+      missingEnums: remaining.missingEnums,
+    }),
+  );
+};
+
+export const assertDatabaseSchemaCompatibility = async () => {
+  const missing = await listMissingSchemaRequirements();
+  if (missing.missingColumns.length === 0 && missing.missingEnums.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    formatSchemaCompatibilityError({
+      missingColumns: missing.missingColumns,
+      missingEnums: missing.missingEnums,
+    }),
   );
 };
